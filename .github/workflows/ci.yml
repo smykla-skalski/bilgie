@@ -128,7 +128,7 @@ jobs:
       - name: Run govulncheck
         run: |
           set +e
-          go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./... > govulncheck.out 2>&1
+          go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./... > govulncheck.out 2>&1
           VULN_EXIT=$?
           set -e
           {
