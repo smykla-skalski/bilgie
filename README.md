@@ -10,9 +10,6 @@ something floods; bilgie works like the float switch that guards a boat's bilge:
 Interactive TUI, 27 built-in providers for macOS, Linux and Windows, auto-discovery, smart LRU cleaning and an
 unattended `auto` mode that runs from the OS scheduler.
 
-> bilgie was called `cache-buster` and lived at `github.com/Automaat/cache-buster`. The old module path is
-> moved: import and install `github.com/smykla-skalski/bilgie`. The old repository URLs redirect.
-
 ![demo](./doc/demo.gif)
 <!-- Generate with: brew install vhs && vhs doc/demo.tape -->
 
@@ -41,23 +38,6 @@ Download the archive for your platform from [releases](https://github.com/smykla
 | Windows | amd64, arm64 | `.zip` |
 
 Extract it and put `bilgie` (`bilgie.exe` on Windows) on your `PATH`.
-
-### Upgrading from cache-buster
-
-The first run of any `bilgie` command moves `~/.config/cache-buster` to `~/.config/bilgie` and
-`~/.local/state/cache-buster` to `~/.local/state/bilgie` (config, run history and the first-run marker),
-and prints one line per move. Nothing needs read access to the contents, so unreadable files move too.
-A legacy directory that is a symlink to a directory (home-manager, stow) or a junction is renamed as a link and its
-target is never touched. When the new directory already exists, entries it lacks move over and nothing is
-overwritten; entries that collide stay in the legacy directory and a warning says to merge them by hand.
-A failure that persists is warned about once, again after a day or when it changes.
-While the legacy `config.yaml` has not reached `~/.config/bilgie`, `clean`, `interactive`, `auto`, `tick` and
-`install-agent` refuse to run (previews with `--dry-run` or `--assume-free` still work) instead of using default
-config, and `bilgie doctor` names the exact `mv` command to finish. `help` and shell completion never migrate anything.
-`install-agent` and `uninstall-agent` also remove
-an agent installed under the old names (launchd label `dev.mskalski.cache-buster`, the `cache-buster`
-systemd unit, crontab tag and Task Scheduler task). Run `bilgie install-agent` once after upgrading; the first
-run after it is a dry-run again.
 
 ## Quick Start
 

@@ -11,7 +11,6 @@ import (
 	"github.com/smykla-skalski/bilgie/internal/auto"
 	"github.com/smykla-skalski/bilgie/internal/config"
 	"github.com/smykla-skalski/bilgie/internal/doctor"
-	"github.com/smykla-skalski/bilgie/internal/migrate"
 	"github.com/smykla-skalski/bilgie/internal/osshim"
 	"github.com/spf13/cobra"
 )
@@ -75,9 +74,6 @@ func runDoctorWithLoader(ctx context.Context, loader *config.Loader, env autoEnv
 	in.Pass, in.PassErr = auto.ReadPassState(env.stateDir)
 
 	in.Free, in.FreeErr = env.free()
-	if p := pendingLegacyConfig(env.home); p != nil {
-		in.LegacyConfig, in.LegacyConfigStep = p.Old, p.Step()
-	}
 
 	if in.NotifierProgram != "" {
 		_, in.NotifierErr = lookPath(in.NotifierProgram)
@@ -136,11 +132,4 @@ func loadValidConfig(loader *config.Loader) (*config.Config, error) {
 		return nil, fmt.Errorf("validate config: %w", err)
 	}
 	return cfg, nil
-}
-
-func pendingLegacyConfig(home string) *migrate.Pending {
-	if home == "" {
-		return nil
-	}
-	return migrate.PendingConfig(home)
 }

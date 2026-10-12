@@ -535,7 +535,6 @@ func TestAgentInstall_WritesPlistArmsDryRunAndLoads(t *testing.T) {
 	assert.Equal(t, filepath.Join(a.Home, "Library", "LaunchAgents", AgentLabel+".plist"), a.PlistPath())
 	assert.True(t, FirstRunPending(a.StateDir))
 	assert.Equal(t, [][]string{
-		{"launchctl", "bootout", "gui/501/" + legacyIdentity.label},
 		{"launchctl", "bootout", "gui/501/" + AgentLabel},
 		{"launchctl", "bootstrap", "gui/501", a.PlistPath()},
 	}, rec.calls)
@@ -613,7 +612,6 @@ func TestAgentUninstall_UnloadsRemovesPlistAndMarker(t *testing.T) {
 	assert.NoFileExists(t, a.PlistPath())
 	assert.False(t, FirstRunPending(a.StateDir))
 	assert.Equal(t, [][]string{
-		{"launchctl", "bootout", "gui/501/" + legacyIdentity.label},
 		{"launchctl", "bootout", "gui/501/" + AgentLabel},
 	}, rec.calls)
 }
@@ -934,8 +932,6 @@ func TestAgentUninstall_UnrecognisedBootoutWithFailingPrintStillRemoves(t *testi
 	assert.NoFileExists(t, a.PlistPath())
 	assert.False(t, FirstRunPending(a.StateDir))
 	assert.Equal(t, [][]string{
-		{"launchctl", "bootout", "gui/501/" + legacyIdentity.label},
-		{"launchctl", "print", "gui/501/" + legacyIdentity.label},
 		{"launchctl", "bootout", "gui/501/" + AgentLabel},
 		{"launchctl", "print", "gui/501/" + AgentLabel},
 	}, rec.calls)

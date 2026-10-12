@@ -2,10 +2,7 @@ package auto
 
 import (
 	"errors"
-	"os"
 	"path/filepath"
-	"runtime"
-	"strings"
 	"testing"
 	"time"
 
@@ -147,62 +144,4 @@ func TestCronInstall_PointsAtLingerForASystemdTimer(t *testing.T) {
 	require.NoError(t, a.Install(t.Context()))
 
 	assert.Contains(t, output(a), "loginctl enable-linger")
-}
-
-func TestTaskInstall_RemovesDefinitionLeftInTheLegacyStateDir(t *testing.T) {
-	s := &scriptedExec{}
-	a := newOSAgent(t, "windows", windowsExe, s)
-	left := filepath.Join(a.Home, ".local", "state", "cache-buster", "cache-buster-task.xml")
-	require.NoError(t, os.MkdirAll(filepath.Dir(left), 0o750))
-	require.NoError(t, os.WriteFile(left, []byte("x"), 0o600))
-
-	require.NoError(t, a.Install(t.Context()))
-
-	assert.NoFileExists(t, left)
-}
-
-func TestInstallLaunchd_RemovesTheLegacyLogDir(t *testing.T) {
-	a := newAgent(t, &recorder{})
-	logs := filepath.Join(a.Home, "Library", "Logs", "cache-buster")
-	require.NoError(t, os.MkdirAll(logs, 0o750))
-	require.NoError(t, os.WriteFile(filepath.Join(logs, "auto.log"), []byte("old"), 0o600))
-
-	require.NoError(t, a.Install(t.Context()))
-
-	assert.NoDirExists(t, logs)
-}
-
-func TestInstallLaunchd_KeepsAForeignFileInTheLegacyLogDir(t *testing.T) {
-	a := newAgent(t, &recorder{})
-	logs := filepath.Join(a.Home, "Library", "Logs", "cache-buster")
-	require.NoError(t, os.MkdirAll(logs, 0o750))
-	keep := filepath.Join(logs, "notes.txt")
-	require.NoError(t, os.WriteFile(keep, []byte("mine"), 0o600))
-
-	require.NoError(t, a.Install(t.Context()))
-
-	assert.FileExists(t, keep)
-	assert.False(t, strings.Contains(output(a), "error"))
-}
-
-func TestInstallLaunchd_LegacyLogDirSymlinkNeverDeletesInItsTarget(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("symlinks need a privilege on Windows")
-	}
-	a := newAgent(t, &recorder{})
-	target := filepath.Join(t.TempDir(), "precious")
-	require.NoError(t, os.MkdirAll(target, 0o750))
-	log := filepath.Join(target, "auto.log")
-	other := filepath.Join(target, "other.txt")
-	require.NoError(t, os.WriteFile(log, []byte("precious"), 0o600))
-	require.NoError(t, os.WriteFile(other, []byte("keep"), 0o600))
-	logs := filepath.Join(a.Home, "Library", "Logs", "cache-buster")
-	require.NoError(t, os.MkdirAll(filepath.Dir(logs), 0o750))
-	require.NoError(t, os.Symlink(target, logs))
-
-	require.NoError(t, a.Install(t.Context()))
-
-	assert.FileExists(t, log)
-	assert.FileExists(t, other)
-	assert.Contains(t, output(a), "leaving "+logs)
 }
