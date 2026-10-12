@@ -312,8 +312,8 @@ func TestInstallAgent_ReplacesTheV010AutoAgent(t *testing.T) {
 	assert.Contains(t, string(data), "<string>tick</string>")
 	assert.Contains(t, string(data), "<integer>120</integer>")
 	assert.NotContains(t, string(data), "<integer>1800</integer>")
-	assert.Equal(t, []string{"launchctl", "bootout", "gui/501/" + auto.AgentLabel}, f.launchd[1])
-	assert.Equal(t, "bootstrap", f.launchd[2][1])
+	assert.Equal(t, []string{"launchctl", "bootout", "gui/501/" + auto.AgentLabel}, f.launchd[0])
+	assert.Equal(t, "bootstrap", f.launchd[1][1])
 }
 
 func TestTick_PreviewRunsLeaveTheRealStateAlone(t *testing.T) {

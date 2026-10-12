@@ -123,28 +123,7 @@ func (a Agent) uninstallLaunchd(ctx context.Context) (bool, error) {
 	if removed {
 		fmt.Fprintf(a.Out, "removed %s\n", a.PlistPath())
 	}
-	if a.legacy {
-		a.removeLegacyLogs()
-	}
 	return removed, nil
-}
-
-// removeLegacyLogs drops the log dir of the pre-rename agent: its auto.log
-// and then the dir, only if nothing else is in it. Only a real directory
-// qualifies: a symlink or junction may lead to a dir the user cares about, so
-// it is left alone with a warning.
-func (a Agent) removeLegacyLogs() {
-	dir := filepath.Join(a.Home, "Library", "Logs", legacyAgentName)
-	info, err := os.Lstat(dir)
-	if err != nil {
-		return
-	}
-	if !info.IsDir() {
-		fmt.Fprintf(a.Out, "warning: leaving %s in place: it is not a plain directory\n", dir)
-		return
-	}
-	_, _ = removeIfExists(filepath.Join(dir, "auto.log"))
-	_ = os.Remove(dir)
 }
 
 // agentPath is the PATH launchd gives the job. launchd carries none of the

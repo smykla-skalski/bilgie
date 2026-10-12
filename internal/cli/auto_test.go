@@ -272,9 +272,8 @@ func TestInstallAgent_WritesPlistWithoutRealLaunchctl(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(data), "<integer>300</integer>")
 	assert.True(t, auto.FirstRunPending(f.env.stateDir))
-	require.Len(t, f.launchd, 3)
-	assert.Equal(t, []string{"launchctl", "bootout", "gui/501/dev.mskalski.cache-buster"}, f.launchd[0])
-	assert.Equal(t, []string{"launchctl", "bootout", "gui/501/" + auto.AgentLabel}, f.launchd[1])
+	require.Len(t, f.launchd, 2)
+	assert.Equal(t, []string{"launchctl", "bootout", "gui/501/" + auto.AgentLabel}, f.launchd[0])
 }
 
 func TestInstallAgent_RejectsTooShortInterval(t *testing.T) {
@@ -296,7 +295,6 @@ func TestUninstallAgent_RemovesPlist(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(f.home, "Library", "LaunchAgents", auto.AgentLabel+".plist"))
 	assert.False(t, auto.FirstRunPending(f.env.stateDir))
 	assert.Equal(t, [][]string{
-		{"launchctl", "bootout", "gui/501/dev.mskalski.cache-buster"},
 		{"launchctl", "bootout", "gui/501/" + auto.AgentLabel},
 	}, f.launchd)
 }
@@ -323,7 +321,6 @@ func TestInstallAgent_PicksTheBackendOfTheOS(t *testing.T) {
 		wantFile func(home, state string) string
 	}{
 		{"linux", "/usr/local/bin/bilgie", [][]string{
-			{"systemctl", "--user", "disable", "--now", "cache-buster.timer"},
 			{"crontab", "-l"},
 			{"systemctl", "--user", "show-environment"},
 			{"systemctl", "--user", "daemon-reload"},
@@ -349,11 +346,10 @@ func TestInstallAgent_PicksTheBackendOfTheOS(t *testing.T) {
 			assert.FileExists(t, tt.wantFile(f.home, f.env.stateDir))
 			assert.True(t, auto.FirstRunPending(f.env.stateDir))
 			if tt.wantCmds != nil {
-				assert.Equal(t, tt.wantCmds, f.launchd)
+				assert.Equal(t, tt.wantCmds[1:], f.launchd)
 			} else {
-				require.Len(t, f.launchd, 2)
-				assert.Equal(t, []string{"schtasks", "/Delete", "/TN", "cache-buster", "/F"}, f.launchd[0])
-				assert.Equal(t, "schtasks", f.launchd[1][0])
+				require.Len(t, f.launchd, 1)
+				assert.Equal(t, "schtasks", f.launchd[0][0])
 			}
 
 			f.launchd = nil

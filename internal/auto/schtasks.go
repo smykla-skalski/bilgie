@@ -87,14 +87,6 @@ func (a Agent) uninstallTask(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("remove task definition: %w", err)
 	}
-	if a.legacy {
-		// A skipped state-dir migration leaves the definition in the old dir.
-		oldRemoved, err := removeIfExists(filepath.Join(a.Home, ".local", "state", legacyAgentName, a.id().task+"-task.xml"))
-		if err != nil {
-			return false, fmt.Errorf("remove task definition: %w", err)
-		}
-		fileRemoved = fileRemoved || oldRemoved
-	}
 	if deleted {
 		fmt.Fprintf(a.Out, "removed task %s\n", a.id().task)
 	}

@@ -215,8 +215,6 @@ func TestSystemdInstall_WritesUnitsAndEnablesTimer(t *testing.T) {
 	require.NoError(t, a.Install(t.Context()))
 
 	assert.Equal(t, []string{
-		"systemctl --user disable --now cache-buster.timer",
-		"crontab -l",
 		"systemctl --user show-environment",
 		"systemctl --user daemon-reload",
 		"systemctl --user enable bilgie.timer",
@@ -283,8 +281,6 @@ func TestSystemdUninstall_RemovesUnitsAndMarker(t *testing.T) {
 	assert.NoFileExists(t, a.TimerPath())
 	assert.False(t, FirstRunPending(a.StateDir))
 	assert.Equal(t, []string{
-		"systemctl --user disable --now cache-buster.timer",
-		"crontab -l",
 		"systemctl --user disable --now bilgie.timer",
 		"systemctl --user daemon-reload",
 		"crontab -l",
@@ -308,9 +304,6 @@ func TestSystemdUninstall_NotInstalledIsNotAnError(t *testing.T) {
 
 	assert.Contains(t, output(a), "agent was not installed")
 	assert.Equal(t, []string{
-		"systemctl --user disable --now cache-buster.timer",
-		"systemctl --user show --property=LoadState --value cache-buster.timer",
-		"crontab -l",
 		"systemctl --user disable --now bilgie.timer",
 		"systemctl --user show --property=LoadState --value bilgie.timer",
 		"crontab -l",
@@ -491,9 +484,6 @@ func TestCronUninstall_NoEntryLeavesCrontabAlone(t *testing.T) {
 	require.NoError(t, a.Uninstall(t.Context()))
 
 	assert.Equal(t, []string{
-		"systemctl --user disable --now cache-buster.timer",
-		"systemctl --user show --property=LoadState --value cache-buster.timer",
-		"crontab -l",
 		"systemctl --user disable --now bilgie.timer",
 		"systemctl --user show --property=LoadState --value bilgie.timer",
 		"crontab -l",
@@ -571,7 +561,6 @@ func TestTaskInstall_WritesDefinitionAndCreatesTask(t *testing.T) {
 	require.NoError(t, a.Install(t.Context()))
 
 	assert.Equal(t, []string{
-		"schtasks /Delete /TN cache-buster /F",
 		"schtasks /Create /TN bilgie /XML " + a.TaskXMLPath() + " /F",
 	}, s.commands())
 	raw, err := os.ReadFile(a.TaskXMLPath())
@@ -611,7 +600,6 @@ func TestTaskUninstall_DeletesTaskAndDefinition(t *testing.T) {
 	require.NoError(t, a.Uninstall(t.Context()))
 
 	assert.Equal(t, []string{
-		"schtasks /Delete /TN cache-buster /F",
 		"schtasks /Delete /TN bilgie /F",
 	}, s.commands())
 	assert.NoFileExists(t, a.TaskXMLPath())
@@ -632,8 +620,6 @@ func TestTaskUninstall_NotInstalledIsConfirmedByListing(t *testing.T) {
 
 	assert.Contains(t, output(a), "agent was not installed")
 	assert.Equal(t, []string{
-		"schtasks /Delete /TN cache-buster /F",
-		"schtasks /Query /FO CSV /NH",
 		"schtasks /Delete /TN bilgie /F",
 		"schtasks /Query /FO CSV /NH",
 	}, s.commands())

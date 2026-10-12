@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -21,10 +20,9 @@ var rootCmd = &cobra.Command{
 	Long: `Bilgie works like a bilge pump with a float switch: it idles while free space is above the
 configured level, pumps caches out below it and sweeps hard at the critical level.
 It manages developer caches on macOS, Linux and Windows with configurable size limits.`,
-	Args:              cobra.NoArgs,
-	SilenceErrors:     true,
-	PersistentPreRunE: func(cmd *cobra.Command, _ []string) error { return cli.BeforeCommand(cmd) },
-	RunE:              runRoot,
+	Args:          cobra.NoArgs,
+	SilenceErrors: true,
+	RunE:          runRoot,
 }
 
 func runRoot(_ *cobra.Command, _ []string) error {
@@ -49,9 +47,6 @@ func init() {
 // error line is silenced so it does not repeat.
 func execute(errOut io.Writer) int {
 	if err := rootCmd.Execute(); err != nil {
-		if errors.Is(err, cli.ErrReported) {
-			return 1
-		}
 		fmt.Fprintln(errOut, "Error:", err)
 		return 1
 	}

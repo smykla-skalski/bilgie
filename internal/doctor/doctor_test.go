@@ -376,14 +376,3 @@ func TestDiagnose_ProviderLoadErrorIsNamed(t *testing.T) {
 	assert.Contains(t, f.Hint, "providers.sail-dirs")
 	assert.Positive(t, r.Attention())
 }
-
-func TestDiagnose_ReportsAnUnmigratedLegacyConfig(t *testing.T) {
-	rep := Diagnose(Input{LegacyConfig: "/h/.config/cache-buster", LegacyConfigStep: "mv a b", Now: time.Now()})
-
-	f := rep.Findings[0]
-	assert.Equal(t, "migration", f.Area)
-	assert.Equal(t, Fail, f.Level)
-	assert.Contains(t, f.Message, "/h/.config/cache-buster")
-	assert.Equal(t, "run: mv a b", f.Hint)
-	assert.Equal(t, "agent", Diagnose(Input{Now: time.Now()}).Findings[0].Area)
-}

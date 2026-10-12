@@ -115,11 +115,6 @@ type Input struct {
 	// reads "provider <name>: <reason>".
 	LoadErrors []error
 	GOOS       string
-
-	// LegacyConfig is the pre-rename config that never reached the current
-	// location; LegacyConfigStep is the manual command that moves it.
-	LegacyConfig     string
-	LegacyConfigStep string
 }
 
 // Report is the ordered list of findings.
@@ -140,8 +135,7 @@ func (r Report) Attention() int {
 
 // Diagnose runs every check.
 func Diagnose(in Input) Report {
-	findings := migrationFindings(in)
-	findings = append(findings, agentFinding(in))
+	findings := []Finding{agentFinding(in)}
 	findings = append(findings, cadenceFindings(in)...)
 	findings = append(findings, lastRunFindings(in)...)
 	findings = append(findings, freeSpaceFindings(in)...)
@@ -149,18 +143,6 @@ func Diagnose(in Input) Report {
 	findings = append(findings, configFindings(in)...)
 	findings = append(findings, notifierFinding(in))
 	return Report{Findings: findings}
-}
-
-func migrationFindings(in Input) []Finding {
-	if in.LegacyConfig == "" {
-		return nil
-	}
-	return []Finding{{
-		Area:    "migration",
-		Level:   Fail,
-		Message: fmt.Sprintf("legacy config %s was not migrated: clean, auto, tick and install-agent refuse to run until it is", in.LegacyConfig),
-		Hint:    "run: " + in.LegacyConfigStep,
-	}}
 }
 
 func agentFinding(in Input) Finding {

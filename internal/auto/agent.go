@@ -20,9 +20,8 @@ import (
 const agentCommand = "tick"
 
 const (
-	agentName       = appname.Name
-	legacyAgentName = appname.Legacy
-	labelPrefix     = "dev.mskalski."
+	agentName   = appname.Name
+	labelPrefix = "dev.mskalski."
 )
 
 const (
@@ -39,7 +38,6 @@ type identity struct {
 
 var (
 	currentIdentity = identity{AgentLabel, SystemdUnit, CronTag, TaskName}
-	legacyIdentity  = identity{labelPrefix + legacyAgentName, legacyAgentName, legacyAgentName, legacyAgentName}
 )
 
 const (
@@ -83,20 +81,10 @@ type Agent struct {
 	OS         string
 	ConfigDir  string
 	Now        func() time.Time
-
-	legacy bool
 }
 
 func (a Agent) id() identity {
-	if a.legacy {
-		return legacyIdentity
-	}
 	return currentIdentity
-}
-
-func (a Agent) legacyAgent() Agent {
-	a.legacy = true
-	return a
 }
 
 func (a Agent) goos() string {
@@ -133,9 +121,6 @@ func (a Agent) Install(ctx context.Context) error {
 	if !isAbsPath(goos, a.Exe) {
 		return fmt.Errorf("binary path must be absolute, got %q", a.Exe)
 	}
-	if err := a.removeLegacy(ctx); err != nil {
-		return err
-	}
 	alreadyPending := FirstRunPending(a.StateDir)
 	if err := MarkFirstRunPending(a.StateDir); err != nil {
 		return err
@@ -160,18 +145,6 @@ func (a Agent) Install(ctx context.Context) error {
 	return nil
 }
 
-// removeLegacy removes a job installed under the pre-rename names so it does
-// not run next to the new one.
-func (a Agent) removeLegacy(ctx context.Context) error {
-	if a.legacy {
-		return nil
-	}
-	if _, err := a.legacyAgent().uninstallJob(ctx); err != nil {
-		return fmt.Errorf("remove legacy %s agent: %w", legacyAgentName, err)
-	}
-	return nil
-}
-
 func (a Agent) uninstallJob(ctx context.Context) (bool, error) {
 	switch a.goos() {
 	case goosDarwin:
@@ -187,22 +160,16 @@ func supportedOS(goos string) bool {
 	return goos == goosDarwin || goos == goosLinux || goos == goosWindows
 }
 
-// Uninstall removes everything Install created for this OS, plus any job left
-// by the pre-rename names, tolerating a job that is not installed, and clears
-// the first-run marker.
+// Uninstall removes everything Install created for this OS and clears the
+// first-run marker.
 func (a Agent) Uninstall(ctx context.Context) error {
 	if goos := a.goos(); !supportedOS(goos) {
 		return fmt.Errorf("uninstall-agent is not supported on %s", goos)
 	}
-	legacyRemoved, legacyErr := a.legacyAgent().uninstallJob(ctx)
-	if legacyErr != nil {
-		legacyErr = fmt.Errorf("remove legacy %s agent: %w", legacyAgentName, legacyErr)
-	}
 	removed, err := a.uninstallJob(ctx)
-	if err := errors.Join(legacyErr, err); err != nil {
+	if err != nil {
 		return err
 	}
-	removed = removed || legacyRemoved
 	if err := ClearFirstRun(a.StateDir); err != nil {
 		return err
 	}
