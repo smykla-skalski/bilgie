@@ -136,6 +136,7 @@ Providers are auto-detected — only tools installed on your system appear in th
 | copilot (macOS only) | 1G | file-based; skips paths with open files |
 | golangci-lint (macOS only) | 1G | file-based; skips paths with open files |
 | node-gyp (macOS only) | 1G | file-based; skips paths with open files |
+| agent-scratch-dirs (disabled by default; every OS temp-dir child that carries an owner marker) | 20G | whole-directory; owner, idle, open-file and `.git` checks |
 | sail-e2e-dirs (disabled by default; `~/Library/Caches/dev.smykla.sail.e2e.*`, macOS only) | 5G | whole-directory; idle, open-file and `.git` checks (git data inside the directory is fine) |
 | **Project artifacts** | | |
 | project-artifacts (Rust `target`, `node_modules`, Python venvs of idle projects) | 20G | whole-directory, oldest project first |
@@ -559,6 +560,7 @@ providers:
 | `min_idle` | `dir-pattern`: minimum idle time, from the newest mtime in the tree (default `2h`); `project-artifacts`: project idle time (default `7d`); units `m`, `h`, `d`, minimum `1m` |
 | `trim_idle` | `project-artifacts`: Rust build units (`.fingerprint`, `build`, `deps`, `incremental`) unused for this long are removed from the `target/` of an active project; a profile whose `.cargo-lock` is held is skipped, and dry-run lists the bytes it would trim (default `30d`; units `m`, `h`, `d`, minimum `1m`) |
 | `skip_if_open` | `dir-pattern`, `project-artifacts`: skip directories with open files via `lsof +D` (default `true`) |
+| `owner_marker` | `dir-pattern`: only sweep matches that carry an owner marker file (default `false`; `agent-scratch-dirs` sets `true`) |
 | `skip_if_git_worktree` | `dir-pattern`: skip directories whose `.git` entries reach outside them (default `true`) |
 | `max_depth` | `project-artifacts`: directory levels searched below each root (default `4`, from 1 to 16; a negative value is an error) |
 | `pass_budget` | `project-artifacts`: time one clean pass may spend before the remaining candidates are skipped (default `30s`; units `ms`, `s`, `m`, `h`, `d`) |
@@ -770,6 +772,45 @@ despite holding `.git`: `allowed despite 3 .git entries with all git data inside
 `--dry-run` as `would remove`. `auto` leaves the `.git` check of these matches to the provider
 instead of the marker scan described under `auto`, unless `skip_if_git_worktree` is `false`.
 Setting it to `false` turns the check off for `clean`.
+
+### Agent scratch roots
+
+Agents create scratch roots in the temp directory under names of their own (`reef-75.*`,
+`sai-219-ship`, `sail-runtime-<uuid>`). The built-in `agent-scratch-dirs` provider (disabled by
+default, `owner_marker: true`) looks at every child of the OS temp dir and the fixed system temp
+dir, and sweeps only the ones that carry an owner marker, whatever their name. Children without a
+marker are not candidates and are not listed.
+
+The marker is a file named `.sail-scratch-root` directly in the root. Its content is the owner's
+process id and start time in unix seconds, separated by a space:
+
+```text
+75352 1792004192
+```
+
+Sail writes this file. Any other agent can write the same one at startup, with its own pid and
+its real start time. Rules, for every `dir-pattern` provider and every match that carries the marker:
+
+- The owner is running when the pid exists and its start time is within 5 seconds of the marker's.
+  A running owner's root is never removed, and neither is one whose owner cannot be checked.
+- A pid that runs but started at another time was reused: the owner counts as exited.
+- A marker that is missing its fields, has a pid or start that is not a positive number, is larger
+  than 256 bytes, is not a regular file or cannot be read blocks the root. A marker never makes a
+  root eligible on its own: with `owner_marker` a root without a marker is not a candidate, one with
+  a bad marker is listed as skipped, and a root with an exited owner still has to pass the idle,
+  `.git` and open-file checks. `sail-dirs` follows the same rules for the `sail*` roots that carry a marker.
+
+For agents that write no marker, add a `dir-pattern` provider with their name globs:
+
+```yaml
+providers:
+  reef-dirs:
+    type: dir-pattern
+    enabled: true
+    paths: ["/tmp/reef-*"]
+    max_size: 20G
+    min_idle: 24h
+```
 
 ## Building from Source
 
