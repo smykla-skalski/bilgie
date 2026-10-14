@@ -158,44 +158,44 @@ func TestDirPatternSkipRules(t *testing.T) {
 			setup: func(t *testing.T, root string) string {
 				t.Helper()
 				dir := makeDir(t, root, "sail-git", 10, 10*time.Hour)
-				require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o750))
+				linkWorktree(t, filepath.Join(dir, ".git"), t.TempDir())
 				ageTree(t, dir, 10*time.Hour)
 				return dir
 			},
-			wantReason: "contains .git",
+			wantReason: "linked worktree outside the root",
 		},
 		{
 			name: ".git file (linked worktree) nested deeper",
 			setup: func(t *testing.T, root string) string {
 				t.Helper()
 				dir := makeDir(t, root, "sail-gitfile", 10, 10*time.Hour)
-				require.NoError(t, os.WriteFile(filepath.Join(dir, "sub", ".git"), []byte("gitdir: x"), 0o600))
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "sub", ".git"), []byte("gitdir: "+t.TempDir()+"\n"), 0o600))
 				ageTree(t, dir, 10*time.Hour)
 				return dir
 			},
-			wantReason: "contains .git",
+			wantReason: "git data outside the root",
 		},
 		{
 			name: ".GIT directory in another letter case",
 			setup: func(t *testing.T, root string) string {
 				t.Helper()
 				dir := makeDir(t, root, "sail-gitcase", 10, 10*time.Hour)
-				require.NoError(t, os.Mkdir(filepath.Join(dir, ".GIT"), 0o750))
+				linkWorktree(t, filepath.Join(dir, ".GIT"), t.TempDir())
 				ageTree(t, dir, 10*time.Hour)
 				return dir
 			},
-			wantReason: "contains .git",
+			wantReason: "linked worktree outside the root",
 		},
 		{
 			name: ".Git file nested deeper",
 			setup: func(t *testing.T, root string) string {
 				t.Helper()
 				dir := makeDir(t, root, "sail-gitcasefile", 10, 10*time.Hour)
-				require.NoError(t, os.WriteFile(filepath.Join(dir, "sub", ".Git"), []byte("gitdir: x"), 0o600))
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "sub", ".Git"), []byte("gitdir: "+t.TempDir()+"\n"), 0o600))
 				ageTree(t, dir, 10*time.Hour)
 				return dir
 			},
-			wantReason: "contains .git",
+			wantReason: "git data outside the root",
 		},
 		{
 			name: "regular file matching the glob",

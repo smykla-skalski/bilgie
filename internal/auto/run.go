@@ -467,7 +467,7 @@ func skipped(res Result, reason string) Result {
 // the scan was cancelled.
 func protectedReason(ctx context.Context, p provider.Provider, sweep bool, home string, protected []string) (string, error) {
 	for _, path := range p.Paths() {
-		reason, err := pathReason(ctx, path, sweep, home, protected)
+		reason, err := pathReason(ctx, path, sweep, true, home, protected)
 		if err != nil || reason != "" {
 			return reason, err
 		}
@@ -476,11 +476,11 @@ func protectedReason(ctx context.Context, p provider.Provider, sweep bool, home 
 }
 
 // pathReason is protectedReason for one path.
-func pathReason(ctx context.Context, path string, sweep bool, home string, protected []string) (string, error) {
+func pathReason(ctx context.Context, path string, sweep, scanTree bool, home string, protected []string) (string, error) {
 	if sweep && (hasProtectedName(path) || hasResolvedProtectedName(path)) {
 		return "protected path " + path, nil
 	}
-	v := checkProtected(ctx, path, home, protected, true)
+	v := checkProtected(ctx, path, home, protected, scanTree)
 	switch {
 	case v.cancelled:
 		return "", ctx.Err()
@@ -508,14 +508,15 @@ const eagerGuardLimit = 64
 func guardPaths(ctx context.Context, p provider.Provider, g provider.PathGuarded, home string, protected []string) (string, error) {
 	paths := p.Paths()
 	reasons := make(map[string]string, len(paths))
+	scanTree := !ownsGitCheck(p)
 	if len(paths) > eagerGuardLimit {
-		g.SetPathGuard(cachedGuard(ctx, reasons, home, protected))
+		g.SetPathGuard(cachedGuard(ctx, reasons, scanTree, home, protected))
 		return "", nil
 	}
 
 	first, blocked := "", 0
 	for _, path := range paths {
-		reason, err := pathReason(ctx, path, true, home, protected)
+		reason, err := pathReason(ctx, path, true, scanTree, home, protected)
 		if err != nil {
 			return "", err
 		}
@@ -530,18 +531,26 @@ func guardPaths(ctx context.Context, p provider.Provider, g provider.PathGuarded
 	if len(paths) > 0 && blocked == len(paths) {
 		return first, nil
 	}
-	g.SetPathGuard(cachedGuard(ctx, reasons, home, protected))
+	g.SetPathGuard(cachedGuard(ctx, reasons, scanTree, home, protected))
 	return "", nil
+}
+
+// ownsGitCheck reports whether p inspects the .git entries below its matches
+// itself. The marker scan then stays out of the way: p tells a .git whose data
+// lies inside the match from one that reaches outside it.
+func ownsGitCheck(p provider.Provider) bool {
+	g, ok := p.(provider.GitChecker)
+	return ok && g.ChecksGit()
 }
 
 // cachedGuard answers from reasons and records the verdict of every path it
 // had to check itself.
-func cachedGuard(ctx context.Context, reasons map[string]string, home string, protected []string) func(string) string {
+func cachedGuard(ctx context.Context, reasons map[string]string, scanTree bool, home string, protected []string) func(string) string {
 	return func(path string) string {
 		if reason, ok := reasons[path]; ok {
 			return reason
 		}
-		reason, err := pathReason(ctx, path, true, home, protected)
+		reason, err := pathReason(ctx, path, true, scanTree, home, protected)
 		if err != nil {
 			return "cancelled"
 		}

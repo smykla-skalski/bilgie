@@ -165,7 +165,7 @@ func TestDirPatternSweepsSailE2EDirectories(t *testing.T) {
 	stale := makeDir(t, root, "dev.smykla.sail.e2e.1", 1000, 5*time.Hour)
 	fresh := makeDir(t, root, "dev.smykla.sail.e2e.2", 1000, time.Minute)
 	repo := makeDir(t, root, "dev.smykla.sail.e2e.3", 1000, 5*time.Hour)
-	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".git"), 0o750))
+	writeText(t, filepath.Join(repo, ".git"), "gitdir: "+t.TempDir()+"\n")
 	ageTree(t, repo, 5*time.Hour)
 	other := makeDir(t, root, "dev.smykla.sail.app", 1000, 5*time.Hour)
 
@@ -177,6 +177,6 @@ func TestDirPatternSweepsSailE2EDirectories(t *testing.T) {
 
 	assert.False(t, exists(stale))
 	assert.True(t, exists(fresh), "recently modified")
-	assert.True(t, exists(repo), "contains .git")
+	assert.True(t, exists(repo), "git data outside the root")
 	assert.True(t, exists(other), "outside the glob")
 }
