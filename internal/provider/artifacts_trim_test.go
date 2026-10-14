@@ -248,3 +248,56 @@ func TestTrimProfile_FailsWithoutFingerprintDir(t *testing.T) {
 
 	require.Error(t, err)
 }
+
+func TestRustProfiles_MissingTargetHasNone(t *testing.T) {
+	assert.Empty(t, rustProfiles(filepath.Join(t.TempDir(), "absent")))
+}
+
+func TestRustProfiles_SkipsFilesAndPlainDirectories(t *testing.T) {
+	target := t.TempDir()
+	writeFile(t, filepath.Join(target, "stray.txt"), "x")
+	writeFile(t, filepath.Join(target, "plain", "nested", "file"), "x")
+	writeFile(t, filepath.Join(target, "debug", ".fingerprint", "u-"+oldHash, "f"), "x")
+	writeFile(t, filepath.Join(target, "triple", "release", ".fingerprint", "u-"+oldHash, "f"), "x")
+
+	got := rustProfiles(target)
+
+	assert.ElementsMatch(t, []string{filepath.Join(target, "debug"), filepath.Join(target, "triple", "release")}, got)
+}
+
+func TestLastUse_MissingPathIsZero(t *testing.T) {
+	used, err := lastUse(context.Background(), filepath.Join(t.TempDir(), "absent"))
+
+	require.NoError(t, err)
+	assert.True(t, used.IsZero())
+}
+
+func TestMeasureTrimEntry_MissingPathIsNotOK(t *testing.T) {
+	_, _, ok := measureTrimEntry(context.Background(), filepath.Join(t.TempDir(), "absent"))
+
+	assert.False(t, ok)
+}
+
+func TestMeasureTrimEntry_SizesFilesAndDirectories(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "a", "f1"), "123")
+	writeFile(t, filepath.Join(dir, "a", "f2"), "45")
+	writeFile(t, filepath.Join(dir, "single"), "6789")
+
+	bytes, files, ok := measureTrimEntry(context.Background(), filepath.Join(dir, "a"))
+	assert.True(t, ok)
+	assert.Equal(t, int64(5), bytes)
+	assert.Equal(t, int64(2), files)
+
+	bytes, files, ok = measureTrimEntry(context.Background(), filepath.Join(dir, "single"))
+	assert.True(t, ok)
+	assert.Equal(t, int64(4), bytes)
+	assert.Equal(t, int64(1), files)
+}
+
+func TestLockProfile_NoLockFileMeansFree(t *testing.T) {
+	release, skip := lockProfile(t.TempDir())
+
+	assert.Empty(t, skip)
+	release()
+}
