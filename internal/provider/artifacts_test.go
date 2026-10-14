@@ -1503,7 +1503,9 @@ func TestProjectArtifacts_IgnoredCheckKeepsArtifactOutsideRepo(t *testing.T) {
 	scan, err := h.p.scan(context.Background())
 	require.NoError(t, err)
 	ps := h.p.newPass(context.Background(), scan)
-	c := ps.candidates(context.Background())[0]
+	cands := ps.candidates(context.Background())
+	require.Len(t, cands, 1)
+	c := cands[0]
 	c.proj.repoRoot = h.path("elsewhere", "repo")
 
 	assert.Equal(t, reasonDirty, ps.ignoredReason(context.Background(), c))
