@@ -245,12 +245,12 @@ func TestMise_PluginGitClonesDoNotCauseSkip(t *testing.T) {
 	}
 }
 
-func TestMise_RunningManagedBinarySkips(t *testing.T) {
+func TestMise_RunningManagedBinaryDoesNotSkip(t *testing.T) {
 	f := newMiseFixture(t)
 	installFakeTool(t, "mise", fakeToolSpec{
 		Replies: map[string]fakeReply{
-			"prune --dry-run": {Touch: f.marker},
-			"prune --yes":     {Touch: f.marker},
+			"prune --dry-run": {Stdout: f.listing()},
+			"prune --yes":     {Remove: []string{f.node, f.python}},
 		},
 	})
 	p := newMise(t, f.root, config.Provider{})
@@ -262,8 +262,8 @@ func TestMise_RunningManagedBinarySkips(t *testing.T) {
 	res, err := p.Clean(context.Background(), CleanOptions{Mode: CleanModeSmart})
 
 	require.NoError(t, err)
-	assert.Contains(t, res.SkipReason, "mise-managed binary is running")
-	assert.NoFileExists(t, f.marker, "mise must not even be asked")
+	assert.Empty(t, res.SkipReason)
+	assert.NoDirExists(t, f.node)
 }
 
 func TestMise_ProcessListFailureSkips(t *testing.T) {
@@ -279,17 +279,63 @@ func TestMise_ProcessListFailureSkips(t *testing.T) {
 	assert.NoFileExists(t, f.marker)
 }
 
-func TestMise_RunningMiseSkips(t *testing.T) {
+func TestMise_MutatingMiseSkips(t *testing.T) {
 	f := newMiseFixture(t)
 	installFakeTool(t, "mise", fakeToolSpec{Replies: map[string]fakeReply{"prune --dry-run": {Touch: f.marker}}})
 	p := newMise(t, f.root, config.Provider{})
-	p.procLines = func(context.Context) ([]string, error) { return []string{"/opt/homebrew/bin/mise run dev"}, nil }
+	p.procLines = func(context.Context) ([]string, error) {
+		return []string{"/opt/homebrew/bin/mise run dev", "/opt/homebrew/bin/mise install node@22"}, nil
+	}
 
 	res, err := p.Clean(context.Background(), CleanOptions{})
 
 	require.NoError(t, err)
-	assert.Equal(t, "mise is running", res.SkipReason)
+	assert.Equal(t, "mise install is running", res.SkipReason)
 	assert.NoFileExists(t, f.marker)
+}
+
+func TestMise_LongRunningMiseTaskDoesNotSkip(t *testing.T) {
+	f := newMiseFixture(t)
+	installFakeTool(t, "mise", fakeToolSpec{Replies: map[string]fakeReply{"prune --dry-run": {}}})
+	p := newMise(t, f.root, config.Provider{})
+	p.procLines = func(context.Context) ([]string, error) {
+		return []string{"/opt/homebrew/bin/mise dev", "mise run dev", "mise watch build"}, nil
+	}
+
+	res, err := p.Clean(context.Background(), CleanOptions{DryRun: true})
+
+	require.NoError(t, err)
+	assert.Empty(t, res.SkipReason)
+}
+
+func TestMiseMutatingCommand(t *testing.T) {
+	tests := []struct {
+		line string
+		want string
+	}{
+		{"mise install", "install"},
+		{"/usr/local/bin/mise install node@22", "install"},
+		{"mise i", "i"},
+		{"mise upgrade", "upgrade"},
+		{"mise up --bump", "up"},
+		{"mise prune --yes", "prune"},
+		{"mise use -g node@22", "use"},
+		{"mise -q install", "install"},
+		{"mise --cd /work/proj install", "install"},
+		{"mise -C /work use node", "use"},
+		{"mise dev", ""},
+		{"mise run install", ""},
+		{"mise exec node@22 -- install", ""},
+		{"mise", ""},
+		{"", ""},
+		{"/home/u/.local/share/mise/installs/node/22/bin/node install", ""},
+		{"vim mise install", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.line, func(t *testing.T) {
+			assert.Equal(t, tt.want, miseMutatingCommand(tt.line))
+		})
+	}
 }
 
 func TestMise_ProcessMentioningMiseDirIsNotBusy(t *testing.T) {

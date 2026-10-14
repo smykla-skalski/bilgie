@@ -321,9 +321,53 @@ func TestNewBusyGuard(t *testing.T) {
 	assert.Equal(t, []string{filepath.Join("/a", ".lock"), filepath.Join("/b", ".lock")}, uv.locks)
 	assert.Equal(t, []string{"uv"}, uv.processes)
 
-	cargo := newBusyGuard("cargo", nil)
+	assert.Nil(t, newBusyGuard("cargo", nil))
+
+	cargo := newBusyGuard("cargo", []string{"/h/.cargo/registry", "/h/.cargo/git"})
 	require.NotNil(t, cargo)
-	assert.Equal(t, []string{"cargo", "rustc"}, cargo.processes)
+	assert.Empty(t, cargo.processes, "a running cargo process alone must not block")
+	assert.Equal(t, []string{
+		filepath.Join("/h/.cargo", ".package-cache"),
+		filepath.Join("/h/.cargo", ".package-cache-mutate"),
+	}, cargo.locks)
+
+	rustup := newBusyGuard("rustup", nil)
+	require.NotNil(t, rustup)
+	assert.Equal(t, []string{"rustup", "cargo", "rustc"}, rustup.processes)
+}
+
+func TestCargoGuard_BlocksOnlyWhileLockHeld(t *testing.T) {
+	ctx := context.Background()
+	home := t.TempDir()
+	g := newBusyGuard("cargo", []string{filepath.Join(home, "registry"), filepath.Join(home, "git")})
+	require.NotNil(t, g)
+
+	t.Run("long-running cargo without the lock is not busy", func(t *testing.T) {
+		g.listProcesses = func(context.Context) ([]string, error) {
+			t.Fatal("process list must not be consulted")
+			return nil, nil
+		}
+		assert.Empty(t, g.busyReason(ctx))
+	})
+
+	t.Run("held package cache lock is busy", func(t *testing.T) {
+		lock := filepath.Join(home, ".package-cache")
+		release, acquired, err := osshim.TryLock(lock)
+		require.NoError(t, err)
+		require.True(t, acquired)
+		defer release()
+
+		assert.Equal(t, "lock held: "+lock, g.busyReason(ctx))
+	})
+
+	t.Run("released lock is free again", func(t *testing.T) {
+		assert.Empty(t, g.busyReason(ctx))
+	})
+
+	t.Run("failed probe counts as busy", func(t *testing.T) {
+		g.lockHeld = func(string) (bool, error) { return false, errors.New("boom") }
+		assert.Contains(t, g.busyReason(ctx), "cannot check lock")
+	})
 }
 
 func TestCommandProvider_CleanTimeout(t *testing.T) {
