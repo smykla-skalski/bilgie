@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func writeProcStat(t *testing.T, root string, pid, ticks, state string) {
+func writeProcStat(t *testing.T, root, pid, ticks, state string) {
 	t.Helper()
 	dir := filepath.Join(root, pid)
 	require.NoError(t, os.MkdirAll(dir, 0o750))
