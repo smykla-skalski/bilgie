@@ -374,6 +374,8 @@ Thresholds:
   interrupted or failed pass and the forced first-run dry-run do not start a cooldown.
 
 `auto` still works as before and is a full pass on demand (it also resets the routine-pass timer).
+`auto --dry-run` and the forced first-run dry-run delete nothing and leave the timer alone, so the
+first real pass follows without waiting out a cooldown.
 An agent installed by v0.10.0 ran `auto` every 30 minutes; run `bilgie install-agent` once to
 replace it with the tick agent (`bilgie doctor` warns while no tick has been recorded).
 
