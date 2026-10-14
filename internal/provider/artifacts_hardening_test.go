@@ -134,11 +134,24 @@ func TestProjectArtifacts_RelativePathProcessesBlockRemoval(t *testing.T) {
 		{"cargo manifest path", "rust", "cargo", "cargo run --manifest-path app/Cargo.toml", func(r, _ string) string { return r }, true},
 		{"cargo manifest path equals", "rust", "cargo", "cargo run --manifest-path=app/Cargo.toml", func(r, _ string) string { return r }, true},
 		{"unrelated relative path from the parent", "node", "node", "node elsewhere/server.js", func(r, _ string) string { return r }, false},
-		{"shell in the parent with a bare tool", "node", "node", "node", func(r, _ string) string { return r }, false},
+		{"bare tool in the scan root holds the project below", "node", "node", "node", func(r, _ string) string { return r }, true},
+		{"bare cargo build in the scan root", "rust", "cargo", "cargo build", func(r, _ string) string { return r }, true},
+		{"cargo build with a flag in the scan root", "rust", "cargo", "cargo build --release -p app", func(r, _ string) string { return r }, true},
+		{"tool path and bare tool in the scan root", "node", "node", "/usr/local/bin/node", func(r, _ string) string { return r }, true},
+		{"manifest path elsewhere holds only that target", "rust", "cargo", "cargo build --manifest-path other/Cargo.toml", func(r, _ string) string { return r }, false},
+		{"absolute path elsewhere", "node", "node", "node other/server.js", func(r, _ string) string { return r }, false},
+		{"same-named dir does not hide the tool", "rust", "cargo", "cargo build", func(r, _ string) string { return r }, true},
+		{"launcher script outside the root", "node", "node", "node /opt/homebrew/lib/node_modules/npm/bin/npm-cli.js run build", func(r, _ string) string { return r }, true},
+		{"target dir value, separate token", "rust", "cargo", "cargo build --target-dir /tmp/t", func(r, _ string) string { return r }, true},
+		{"feature value with a slash", "rust", "cargo", "cargo build --features a/b", func(r, _ string) string { return r }, true},
+		{"bare tool above the scan root is not held", "node", "node", "node", func(r, _ string) string { return filepath.Dir(r) }, false},
 		{"npm prefix at a sibling", "node", "npm", "npm --prefix elsewhere start", func(r, _ string) string { return r }, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if runtime.GOOS == "windows" && strings.Contains(tt.cmd, " /") {
+				t.Skip("posix absolute paths")
+			}
 			h := newArtifactHarness(t, nil)
 			if tt.kind == "node" {
 				nodeProject(t, h.path("app"), 100, 90*day)
@@ -146,6 +159,7 @@ func TestProjectArtifacts_RelativePathProcessesBlockRemoval(t *testing.T) {
 				rustProject(t, h.path("app"), 100, 90*day)
 			}
 			require.NoError(t, os.MkdirAll(h.path("other"), 0o750))
+			require.NoError(t, os.MkdirAll(h.path("build"), 0o750))
 			root := evalDir(t, h.root)
 			proj := evalDir(t, h.path("app"))
 			h.p.processes = func(context.Context) ([]toolProcess, error) {

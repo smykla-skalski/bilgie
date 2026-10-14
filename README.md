@@ -206,7 +206,9 @@ An artifact is skipped, with the reason in `--verbose` output, when:
   relative path in its arguments, or the value of `--manifest-path`, `--prefix`, `--cwd` or
   `-C`, `-w` or `--workspace`, resolves to a place inside it (`cd ~/code && node app/server.js`,
   `npm --prefix app start`, `node app`). Dev servers such as `vite`, `next-server`, `tsx`
-  and `nodemon` count as Node tools. A working directory above the project is not enough. A process
+  and `nodemon` count as Node tools. A tool whose working directory is above the project, inside the scan
+  root, holds it unless an argument points elsewhere (`cd ~/code && cargo build` holds every Cargo
+  project below; `--manifest-path other/Cargo.toml` holds only `other`). A process
   whose working directory cannot be read counts as busy, and the skip reason names the tool and
   pid (always on Windows, where only image names are visible)
 - a process has an open file in it (`lsof`, one listing for the whole pass, or `/proc` on Linux;

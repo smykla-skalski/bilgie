@@ -352,7 +352,8 @@ func lastReflogTime(path string) (time.Time, bool) {
 
 // busyReason skips an artifact whose project has a running build tool of the
 // artifact's kind: one whose command line names the project, or whose
-// working directory is inside it (or in the enclosing repository, above it).
+// working directory is inside it (or in the enclosing repository, above it),
+// or above it inside the scan root with no path argument pointing elsewhere.
 // A matched process whose directory cannot be read counts as busy.
 func (ps *pass) busyReason(c *candidate) string {
 	if ps.procsErr != nil {
@@ -379,6 +380,8 @@ func (ps *pass) busyReason(c *candidate) string {
 			return tool + " is running on the project"
 		case proj.repoRoot != "" && pathWithin(proc.Cwd, proj.repoRoot) && pathWithin(proj.Dir, proc.Cwd):
 			return tool + " is running in the repository"
+		case holdsFromAbove(proc, proj):
+			return tool + " is running above the project"
 		}
 	}
 	return ""
@@ -420,9 +423,34 @@ func argsReach(proc toolProcess, dirs ...string) bool {
 }
 
 func fieldsReach(fields []string, cwd string, dirs []string) bool {
+	for _, spellings := range argPaths(fields, cwd, false) {
+		for _, spelling := range spellings {
+			for _, dir := range dirs {
+				if dir != "" && pathWithin(spelling, dir) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// valueOfOtherFlag reports whether prev is an option that takes a value and
+// does not select a project, so the next token is not a path to one.
+func valueOfOtherFlag(prev string) bool {
+	prev = strings.Trim(prev, `"';&|()`)
+	return strings.HasPrefix(prev, "-") && !strings.Contains(prev, "=") && !slices.Contains(pathFlags, prev)
+}
+
+// argPaths returns, for each path-like argument, its spellings resolved
+// against cwd: lexical and, when it exists, symlink-resolved. Strict mode
+// drops bare words and values of options that do not select a project.
+func argPaths(fields []string, cwd string, strict bool) [][]string {
+	var out [][]string
 	for i, field := range fields {
 		tok := strings.Trim(field, `"';&|()`)
-		if strings.HasPrefix(tok, "-") {
+		switch {
+		case strings.HasPrefix(tok, "-"):
 			flag, value, hasValue := strings.Cut(tok, "=")
 			if !slices.Contains(pathFlags, flag) {
 				continue
@@ -434,7 +462,9 @@ func fieldsReach(fields []string, cwd string, dirs []string) bool {
 				value = strings.Trim(fields[i+1], `"';&|()`)
 			}
 			tok = value
-		} else if !strings.ContainsAny(tok, `/\`) && !strings.HasPrefix(tok, ".") && !existsBelow(cwd, tok) {
+		case !strings.ContainsAny(tok, `/\`) && !strings.HasPrefix(tok, ".") && (strict || !existsBelow(cwd, tok)):
+			continue
+		case strict && i > 0 && valueOfOtherFlag(fields[i-1]):
 			continue
 		}
 		if tok == "" {
@@ -448,15 +478,40 @@ func fieldsReach(fields []string, cwd string, dirs []string) bool {
 		if resolved, err := filepath.EvalSymlinks(abs); err == nil && resolved != abs {
 			spellings = append(spellings, resolved)
 		}
-		for _, spelling := range spellings {
-			for _, dir := range dirs {
-				if dir != "" && pathWithin(spelling, dir) {
-					return true
-				}
+		out = append(out, spellings)
+	}
+	return out
+}
+
+// holdsFromAbove reports whether a build tool run from a directory above the
+// project, inside the scan root, holds it: `cd ~/code && cargo build` builds
+// whatever manifest sits below. A project selector or script path that
+// resolves inside the scan root but outside the project means the tool works
+// elsewhere, so it holds only that target. Paths outside the scan root, such
+// as a launcher script or a target dir, say nothing about the project.
+func holdsFromAbove(proc toolProcess, proj *project) bool {
+	if proc.Cwd == "" || proj.root == "" || proc.Cwd == proj.Dir ||
+		!pathWithin(proj.Dir, proc.Cwd) || !pathWithin(proc.Cwd, proj.root) {
+		return false
+	}
+	for _, fields := range [][]string{splitQuoted(proc.CommandLine), strings.Fields(proc.CommandLine)} {
+		for _, spellings := range argPaths(fields, proc.Cwd, true) {
+			if isToolPath(spellings[0]) || !pathWithin(spellings[0], proj.root) {
+				continue
+			}
+			if !slices.ContainsFunc(spellings, func(sp string) bool { return pathWithin(sp, proj.Dir) }) {
+				return false
 			}
 		}
 	}
-	return false
+	return true
+}
+
+// isToolPath reports whether path is a build tool executable, such as the
+// /usr/bin/node that starts the command line.
+func isToolPath(path string) bool {
+	base := strings.TrimSuffix(strings.ToLower(filepath.Base(path)), ".exe")
+	return matchAnyKind(base) != ""
 }
 
 // namesRelative reports whether the command line spells the project's path
