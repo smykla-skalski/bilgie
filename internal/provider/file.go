@@ -47,7 +47,13 @@ func (p *FileProvider) smartClean(ctx context.Context, opts CleanOptions) (Clean
 		DryRun:  opts.DryRun,
 	})
 	if err != nil {
-		return CleanResult{}, err
+		// An interrupted trim reports what it already removed.
+		return CleanResult{
+			BytesCleaned: trimResult.FreedBytes,
+			FilesDeleted: trimResult.DeletedCount,
+			Output:       trimResult.Output,
+			Entries:      entriesFromFiles(trimResult.Removed),
+		}, err
 	}
 
 	result := CleanResult{
@@ -113,6 +119,7 @@ func (p *FileProvider) fullClean(ctx context.Context, opts CleanOptions) (CleanR
 			return CleanResult{
 				BytesCleaned: bytesDeleted,
 				FilesDeleted: filesDeleted,
+				Entries:      entries,
 				Output:       "interrupted",
 			}, ctx.Err()
 		default:

@@ -62,7 +62,7 @@ func (p *EntryProvider) Clean(ctx context.Context, opts CleanOptions) (CleanResu
 			continue
 		}
 		if err := ctx.Err(); err != nil {
-			return CleanResult{BytesCleaned: freed, FilesDeleted: removed, Output: "interrupted"}, err
+			return CleanResult{BytesCleaned: freed, FilesDeleted: removed, Output: "interrupted", Entries: removedEntries}, err
 		}
 		if opts.DryRun {
 			fmt.Fprintf(&output, "would remove: %s (%s)\n", e.path, size.FormatSize(e.size))
@@ -70,7 +70,10 @@ func (p *EntryProvider) Clean(ctx context.Context, opts CleanOptions) (CleanResu
 			fmt.Fprintf(&output, "error removing %s: %v\n", e.path, err)
 			failed++
 			// RemoveAll may have deleted part of the tree before failing.
-			freed += p.partiallyFreed(ctx, e)
+			if part := p.partiallyFreed(ctx, e); part > 0 {
+				freed += part
+				removedEntries = append(removedEntries, Entry{Path: e.path, Size: part})
+			}
 			continue
 		}
 		freed += e.size
