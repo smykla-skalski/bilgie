@@ -43,3 +43,46 @@ func sortByRebuildCost(names []string) {
 		return cmp.Or(cmp.Compare(rankOf(a), rankOf(b)), cmp.Compare(a, b))
 	})
 }
+
+// yieldRank orders providers by how much space a clean typically frees:
+// higher ranks free more. It decides the order under disk pressure.
+var yieldRank = map[string]int{
+	"docker":            100,
+	"project-artifacts": 90,
+	"xcode-deriveddata": 80,
+	"ios-simulator":     75,
+	"go-build":          70,
+	"gradle":            65,
+	"cargo":             65,
+	"go-mod":            60,
+	"pnpm":              55,
+	"npm":               50,
+	"yarn":              50,
+	"uv":                45,
+	"jetbrains":         40,
+	"mise":              35,
+	"pip":               30,
+	"homebrew":          30,
+}
+
+// unknownYield places providers without an entry in the middle of the range.
+const unknownYield = 40
+
+func yieldOf(name string) int {
+	if y, ok := yieldRank[name]; ok {
+		return y
+	}
+	return unknownYield
+}
+
+// sortByYield puts the providers that free the most first; ties fall back to
+// rebuild cost, then name.
+func sortByYield(names []string) {
+	slices.SortFunc(names, func(a, b string) int {
+		return cmp.Or(
+			cmp.Compare(yieldOf(b), yieldOf(a)),
+			cmp.Compare(rankOf(a), rankOf(b)),
+			cmp.Compare(a, b),
+		)
+	})
+}
