@@ -94,3 +94,19 @@ func TestOpenRegular(t *testing.T) {
 	_, err = OpenRegular(filepath.Join(dir, "missing"))
 	require.ErrorIs(t, err, os.ErrNotExist)
 }
+
+func TestRequireRegular(t *testing.T) {
+	dir := t.TempDir()
+	d, err := os.Open(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = d.Close() })
+	require.ErrorIs(t, requireRegular(d, dir), ErrNotRegular)
+
+	file := filepath.Join(dir, "f")
+	require.NoError(t, os.WriteFile(file, nil, 0o600))
+	f, err := os.Open(file)
+	require.NoError(t, err)
+	require.NoError(t, requireRegular(f, file))
+	require.NoError(t, f.Close())
+	require.Error(t, requireRegular(f, file))
+}
