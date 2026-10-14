@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -663,6 +664,66 @@ providers:
 
 	assert.Equal(t, []string{"~/.cache/pip"}, cfg.Providers["pip"].Paths, "narrowed on purpose and present here")
 	assert.Equal(t, []string{"~/Library/Caches/lima"}, cfg.Providers["lima"].Paths, "absent here, so another OS's default")
+}
+
+func TestLoader_ReplacingAForeignDefaultWarns(t *testing.T) {
+	tests := []struct {
+		name     string
+		yaml     string
+		wantWarn []string
+	}{
+		{
+			name:     "another OS's defaults",
+			yaml:     "providers:\n  lima:\n    paths: [~/Library/Caches/lima]\n",
+			wantWarn: []string{"providers.lima.paths", "darwin", "linux"},
+		},
+		{
+			name: "legacy sail-dirs list is replaced silently",
+			yaml: "providers:\n  sail-dirs:\n    paths: [/private/tmp/sail*]\n",
+		},
+		{
+			name: "own defaults that another OS shares are silent",
+			yaml: "providers:\n  npm:\n    paths: [~/.npm]\n",
+		},
+		{
+			name: "a custom list is kept silently",
+			yaml: "providers:\n  lima:\n    paths: [/opt/lima]\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := savedConfig(t, "version: \"1\"\n"+tt.yaml)
+			loader := NewLoader()
+			loader.SetConfigPath(path)
+			loader.SetPlatform(Platform{OS: OSLinux, Home: "/home/u", TempDir: "/tmp", SystemTempDir: "/tmp"})
+			loader.pathsExist = func([]string) bool { return false }
+			var buf bytes.Buffer
+			loader.SetWarnWriter(&buf)
+
+			_, err := loader.Load()
+			require.NoError(t, err)
+
+			if len(tt.wantWarn) == 0 {
+				assert.Empty(t, buf.String())
+			}
+			for _, w := range tt.wantWarn {
+				assert.Contains(t, buf.String(), w)
+			}
+		})
+	}
+}
+
+func TestLoader_NilWarnWriterDoesNotPanic(t *testing.T) {
+	path := savedConfig(t, "version: \"1\"\nproviders:\n  lima:\n    paths: [~/Library/Caches/lima]\n")
+	loader := NewLoader()
+	loader.SetConfigPath(path)
+	loader.SetPlatform(Platform{OS: OSLinux, Home: "/home/u", TempDir: "/tmp", SystemTempDir: "/tmp"})
+	loader.pathsExist = func([]string) bool { return false }
+	loader.SetWarnWriter(nil)
+
+	_, err := loader.Load()
+
+	require.NoError(t, err)
 }
 
 func TestDefaultProvidersFor_RelativeTempDirFallsBackToTmp(t *testing.T) {
