@@ -9,12 +9,15 @@ import (
 
 	"github.com/smykla-skalski/bilgie/internal/cache"
 	"github.com/smykla-skalski/bilgie/internal/config"
+	"github.com/smykla-skalski/bilgie/internal/osshim"
 	"github.com/smykla-skalski/bilgie/pkg/size"
 )
 
 // FileProvider cleans caches by deleting oldest files until under limit.
 type FileProvider struct {
 	*BaseProvider
+	skipIfOpen bool
+	openCheck  func(ctx context.Context, dir string) (bool, error)
 }
 
 // NewFileProvider creates a provider that cleans by file deletion.
@@ -26,6 +29,8 @@ func NewFileProvider(name string, cfg config.Provider) (*FileProvider, error) {
 
 	return &FileProvider{
 		BaseProvider: base,
+		skipIfOpen:   cfg.SkipIfOpen != nil && *cfg.SkipIfOpen,
+		openCheck:    osshim.HasOpenFiles,
 	}, nil
 }
 
@@ -40,43 +45,76 @@ func (p *FileProvider) Clean(ctx context.Context, opts CleanOptions) (CleanResul
 	return p.fullClean(ctx, opts)
 }
 
+// cleanablePaths drops every path with a file open in a running process when
+// skip_if_open is set. An unanswerable check counts as open.
+func (p *FileProvider) cleanablePaths(ctx context.Context) (paths []string, skipped string) {
+	if !p.skipIfOpen {
+		return p.paths, ""
+	}
+	var out strings.Builder
+	for _, path := range p.paths {
+		if _, err := os.Lstat(path); err != nil {
+			continue
+		}
+		open, err := p.openCheck(ctx, path)
+		switch {
+		case err != nil:
+			fmt.Fprintf(&out, "skip: %s (open-file check failed: %v)\n", path, err)
+		case open:
+			fmt.Fprintf(&out, "skip: %s (has open files)\n", path)
+		default:
+			paths = append(paths, path)
+		}
+	}
+	return paths, out.String()
+}
+
 func (p *FileProvider) smartClean(ctx context.Context, opts CleanOptions) (CleanResult, error) {
-	trimResult, err := cache.Trim(ctx, p.paths, cache.TrimOptions{
+	paths, skipped := p.cleanablePaths(ctx)
+	trimResult, err := cache.Trim(ctx, paths, cache.TrimOptions{
 		MaxSize: p.maxSize,
 		MaxAge:  p.maxAge,
 		DryRun:  opts.DryRun,
 	})
 	if err != nil {
-		return CleanResult{}, err
+		// An interrupted trim reports what it already removed.
+		return CleanResult{
+			BytesCleaned: trimResult.FreedBytes,
+			FilesDeleted: trimResult.DeletedCount,
+			Output:       trimResult.Output,
+			Entries:      entriesFromFiles(trimResult.Removed),
+		}, err
 	}
 
 	result := CleanResult{
 		BytesCleaned: trimResult.FreedBytes,
 		FilesDeleted: trimResult.DeletedCount,
-		Output:       trimResult.Output,
+		Output:       skipped + trimResult.Output,
 		Entries:      entriesFromFiles(trimResult.Removed),
 	}
 
 	if len(trimResult.Errors) > 0 {
-		result.Output = formatResultWithErrors(trimResult.Output, trimResult.DeletedCount, trimResult.Errors)
+		result.Output = skipped + formatResultWithErrors(trimResult.Output, trimResult.DeletedCount, trimResult.Errors)
 	}
 
 	return result, nil
 }
 
 func (p *FileProvider) fullClean(ctx context.Context, opts CleanOptions) (CleanResult, error) {
-	currentSize, err := p.CurrentSize(ctx)
+	paths, skipped := p.cleanablePaths(ctx)
+	sized, err := cache.CalculateSizeContext(ctx, paths)
 	if err != nil {
 		return CleanResult{}, err
 	}
+	currentSize := sized.Size
 
 	if currentSize <= p.maxSize {
 		return CleanResult{
-			Output: "already under limit",
+			Output: skipped + "already under limit",
 		}, nil
 	}
 
-	listResult, err := cache.ListFilesContext(ctx, p.paths)
+	listResult, err := cache.ListFilesContext(ctx, paths)
 	if err != nil {
 		return CleanResult{}, err
 	}
@@ -113,6 +151,7 @@ func (p *FileProvider) fullClean(ctx context.Context, opts CleanOptions) (CleanR
 			return CleanResult{
 				BytesCleaned: bytesDeleted,
 				FilesDeleted: filesDeleted,
+				Entries:      entries,
 				Output:       "interrupted",
 			}, ctx.Err()
 		default:
@@ -140,7 +179,7 @@ func (p *FileProvider) fullClean(ctx context.Context, opts CleanOptions) (CleanR
 		return CleanResult{
 			BytesCleaned: bytesDeleted,
 			FilesDeleted: filesDeleted,
-			Output:       output.String(),
+			Output:       skipped + output.String(),
 			Entries:      entries,
 		}, nil
 	}
@@ -148,12 +187,12 @@ func (p *FileProvider) fullClean(ctx context.Context, opts CleanOptions) (CleanR
 	result := CleanResult{
 		BytesCleaned: bytesDeleted,
 		FilesDeleted: filesDeleted,
-		Output:       fmt.Sprintf("deleted %d files", filesDeleted),
+		Output:       skipped + fmt.Sprintf("deleted %d files", filesDeleted),
 		Entries:      entries,
 	}
 
 	if len(deleteErrors) > 0 {
-		result.Output = formatResultWithErrors(result.Output, filesDeleted, deleteErrors)
+		result.Output = skipped + formatResultWithErrors(result.Output[len(skipped):], filesDeleted, deleteErrors)
 	}
 
 	return result, nil

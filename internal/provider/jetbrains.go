@@ -99,6 +99,7 @@ func (p *JetBrainsProvider) cleanDirs(ctx context.Context, removable []string, o
 		case <-ctx.Done():
 			return CleanResult{
 				BytesCleaned: bytesTotal,
+				Entries:      entries,
 				Output:       "interrupted",
 			}, ctx.Err()
 		default:

@@ -18,7 +18,8 @@ var (
 	winPlatform = Platform{
 		OS: OSWindows, Home: `C:\Users\u`, LocalAppData: `C:\Users\u\AppData\Local`, TempDir: `C:\Temp`,
 	}
-	macOnly = []string{"homebrew", "xcode-deriveddata", "xcode-archives", "ios-simulator", "vscode-shipit"}
+	macOnly = []string{"homebrew", "xcode-deriveddata", "xcode-archives", "ios-simulator", "vscode-shipit",
+		"sail-e2e-dirs", "app-updaters", "copilot", "golangci-lint", "node-gyp"}
 )
 
 func TestDefaultProvidersFor_CacheRoots(t *testing.T) {

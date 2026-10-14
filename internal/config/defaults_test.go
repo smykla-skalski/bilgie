@@ -65,3 +65,41 @@ func TestDefaultProviders_CodexSessions(t *testing.T) {
 	assert.Equal(t, "90d", p.MaxAge)
 	assert.Empty(t, p.CleanCmd)
 }
+
+func TestDefaultProviders_AgentAndToolCaches(t *testing.T) {
+	defaults := DefaultProvidersFor(macPlatform)
+
+	tests := map[string]string{
+		"app-updaters":  "~/Library/Caches/*-updater",
+		"copilot":       "~/Library/Caches/copilot",
+		"golangci-lint": "~/Library/Caches/golangci-lint",
+		"node-gyp":      "~/Library/Caches/node-gyp",
+	}
+	for name, path := range tests {
+		t.Run(name, func(t *testing.T) {
+			p, ok := defaults[name]
+			require.True(t, ok)
+			assert.True(t, p.Enabled)
+			assert.Equal(t, []string{path}, p.Paths)
+			assert.NotEmpty(t, p.MaxSize)
+			require.NotNil(t, p.SkipIfOpen)
+			assert.True(t, *p.SkipIfOpen)
+		})
+	}
+
+	for _, p := range []Platform{linPlatform, winPlatform} {
+		for name := range tests {
+			assert.NotContains(t, DefaultProvidersFor(p), name, p.OS)
+		}
+		assert.NotContains(t, DefaultProvidersFor(p), "sail-e2e-dirs", p.OS)
+	}
+}
+
+func TestDefaultProviders_SailE2EDirs(t *testing.T) {
+	p, ok := DefaultProvidersFor(macPlatform)["sail-e2e-dirs"]
+	require.True(t, ok)
+	assert.Equal(t, TypeDirPattern, p.Type)
+	assert.False(t, p.Enabled, "whole-directory sweeps are opt-in")
+	assert.Equal(t, []string{"~/Library/Caches/dev.smykla.sail.e2e.*"}, p.Paths)
+	require.NoError(t, p.DirPatternError())
+}

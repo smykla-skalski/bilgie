@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -227,6 +228,46 @@ func TestClean_InterruptedCleanIsNotAnErrorInJSON(t *testing.T) {
 	require.Len(t, got.Providers, 1)
 	assert.Equal(t, "slow", got.Providers[0].Name)
 	assert.Equal(t, statusCancelled, got.Providers[0].Status)
+}
+
+func TestClean_InterruptedCleanPrintsProviderOutputInText(t *testing.T) {
+	loader, _ := busyUVLoader(t, `  slow:
+    enabled: true
+    paths:
+      - `+t.TempDir()+`
+    max_size: 1GB
+    clean_cmd: 'sh -c "echo partial-progress-line; sleep 30"'
+    clean_timeout: 100s
+`)
+
+	tests := []struct {
+		name      string
+		opts      cleanOptions
+		wantLines bool
+	}{
+		{name: "concise", opts: cleanOptions{force: true}, wantLines: true},
+		{name: "verbose", opts: cleanOptions{force: true, verbose: true}, wantLines: true},
+		{name: "quiet", opts: cleanOptions{force: true, quiet: true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			time.AfterFunc(500*time.Millisecond, cancel)
+
+			var err error
+			out := captureStdout(t, func() {
+				err = runCleanWithContext(func() (context.Context, context.CancelFunc) { return ctx, cancel }, loader, []string{"slow"}, tt.opts, os.Stdin)
+			})
+
+			require.NoError(t, err)
+			if !tt.wantLines {
+				assert.NotContains(t, out, "partial-progress-line")
+				return
+			}
+			assert.Contains(t, out, "partial-progress-line")
+			assert.Less(t, strings.Index(out, "partial-progress-line"), strings.Index(out, "Cancelled"))
+		})
+	}
 }
 
 func TestClean_NamedProviderWithoutCacheDirNamesThePath(t *testing.T) {

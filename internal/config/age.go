@@ -56,6 +56,8 @@ func (c *Config) ValidateAges() error {
 		for _, f := range []struct{ field, value string }{
 			{"max_age", p.MaxAge},
 			{"min_idle", p.MinIdle},
+			{"critical_min_idle", p.CriticalMinIdle},
+			{"emergency_min_idle", p.EmergencyMinIdle},
 		} {
 			if strings.TrimSpace(f.value) == "" {
 				continue

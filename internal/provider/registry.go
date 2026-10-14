@@ -14,6 +14,10 @@ var fileBasedProviders = map[string]bool{
 	"vivaldi":       true,
 	"gh":            true,
 	"vscode-shipit": true,
+	"app-updaters":  true,
+	"copilot":       true,
+	"golangci-lint": true,
+	"node-gyp":      true,
 }
 
 // entryBasedProviders lists providers that must delete whole top-level

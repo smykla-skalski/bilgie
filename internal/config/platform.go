@@ -182,6 +182,11 @@ var providerOSes = map[string][]string{
 	"vscode-shipit":     {OSDarwin},
 	"lima":              {OSDarwin, OSLinux},
 	"gh":                {OSDarwin, OSLinux},
+	"sail-e2e-dirs":     {OSDarwin},
+	"app-updaters":      {OSDarwin},
+	"copilot":           {OSDarwin},
+	"golangci-lint":     {OSDarwin},
+	"node-gyp":          {OSDarwin},
 }
 
 // AppliesOn reports whether the named provider applies on goos. Custom
