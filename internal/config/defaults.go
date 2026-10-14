@@ -225,6 +225,13 @@ func plainCache(maxSize string, paths ...string) Provider {
 	}
 }
 
+// openGuarded makes a file-based provider leave paths with open files alone.
+func openGuarded(pr Provider) Provider {
+	on := true
+	pr.SkipIfOpen = &on
+	return pr
+}
+
 // optInCache is disabled by default: entry mtime records download time, not
 // use, so a daily-use entry can be evicted before an idle one.
 func optInCache(maxSize string, paths ...string) Provider {
@@ -267,6 +274,10 @@ func extraCacheProviders(p Platform) map[string]Provider {
 			SkipPrefixes: []string{"chrome-profile-"},
 		},
 		"vscode-shipit": plainCache("1G", p.cache("com.microsoft.VSCode.ShipIt")),
+		"app-updaters":  openGuarded(plainCache("2G", p.cache("*-updater"))),
+		"copilot":       openGuarded(plainCache("1G", p.cache("copilot"))),
+		"golangci-lint": openGuarded(plainCache("1G", p.cache("golangci-lint"))),
+		"node-gyp":      openGuarded(plainCache("1G", p.cache("node-gyp"))),
 		"rustup": {
 			Enabled:  false,
 			Paths:    []string{"~/.rustup/toolchains"},
@@ -301,6 +312,13 @@ func tempDirProviders(p Platform) map[string]Provider {
 			Type:    TypeDirPattern,
 			Paths:   p.tempGlobs("sail*"),
 			MaxSize: "20G",
+			MinIdle: "2h",
+		},
+		"sail-e2e-dirs": {
+			Enabled: false,
+			Type:    TypeDirPattern,
+			Paths:   []string{p.cache("dev.smykla.sail.e2e.*")},
+			MaxSize: "5G",
 			MinIdle: "2h",
 		},
 	}

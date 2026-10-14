@@ -132,6 +132,11 @@ Providers are auto-detected — only tools installed on your system appear in th
 | gh | 1G | file-based |
 | chrome-devtools-mcp (disabled by default; never evicts `chrome-profile-*`) | 2G | whole-entry |
 | vscode-shipit | 1G | file-based |
+| app-updaters (`~/Library/Caches/*-updater`, macOS only) | 2G | file-based; skips paths with open files |
+| copilot (macOS only) | 1G | file-based; skips paths with open files |
+| golangci-lint (macOS only) | 1G | file-based; skips paths with open files |
+| node-gyp (macOS only) | 1G | file-based; skips paths with open files |
+| sail-e2e-dirs (disabled by default; `~/Library/Caches/dev.smykla.sail.e2e.*`, macOS only) | 5G | whole-directory; idle, open-file and `.git` checks |
 | **Project artifacts** | | |
 | project-artifacts (Rust `target`, `node_modules`, Python venvs of idle projects) | 20G | whole-directory, oldest project first |
 | **Toolchains** | | |
