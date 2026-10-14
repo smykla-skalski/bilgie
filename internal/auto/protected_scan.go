@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/smykla-skalski/bilgie/internal/config"
+	"github.com/smykla-skalski/bilgie/internal/provider"
 )
 
 // DefaultProtectedBudget bounds the size scan of protected entries.
@@ -32,17 +33,29 @@ type ProtectedReport struct {
 	Incomplete bool             `json:"incomplete,omitempty"`
 }
 
-// worktreeHolderDepth is how far below home the scan looks for worktrees
-// directories: ~/worktrees and ~/projects/worktrees, not the whole tree.
-const worktreeHolderDepth = 2
+// discoverDepth is how far below home the scan looks for worktrees
+// directories and git checkouts: ~/code/org/api is three levels down.
+const discoverDepth = 4
 
-// skippedHomeDirs are never read when looking for worktrees: macOS asks the
-// user for permission on the first listing of several of them, and none is
-// a place worktrees live.
+// discoverDirCap bounds the directories listed by one discovery walk.
+const discoverDirCap = 20000
+
+// skippedHomeDirs are never read when looking for protected data: macOS asks
+// the user for permission on the first listing of several of them, and none
+// is a place checkouts live.
 var skippedHomeDirs = []string{"Library", "Documents", "Desktop", "Pictures", "Movies", "Music"}
 
-// WorktreeHolders returns directories named worktrees within a shallow reach
-// of home. Only directory names are read, never file contents. The walk runs
+// dockerDesktopData are the Docker Desktop VM image locations under home. The
+// image holds the volumes; auto never prunes volumes, but no protected root
+// can name it because the docker provider's own path contains it.
+var dockerDesktopData = [][]string{
+	{"Library", "Containers", "com.docker.docker", "Data", "vms"},
+	{".docker", "desktop", "vms"},
+}
+
+// WorktreeHolders returns the worktrees directories and git checkout roots
+// within reach of home. Only directory names are read, never file contents.
+// A checkout or worktrees directory is not searched further. The walk runs
 // off the caller's goroutine so a hung mount cannot outlive ctx; when ctx
 // ends first the result is nil.
 func WorktreeHolders(ctx context.Context, home string) []string {
@@ -50,7 +63,7 @@ func WorktreeHolders(ctx context.Context, home string) []string {
 		return nil
 	}
 	done := make(chan []string, 1)
-	go func() { done <- walkWorktreeHolders(ctx, home) }()
+	go func() { done <- walkNearHome(ctx, home) }()
 	select {
 	case out := <-done:
 		return out
@@ -59,26 +72,31 @@ func WorktreeHolders(ctx context.Context, home string) []string {
 	}
 }
 
-func walkWorktreeHolders(ctx context.Context, home string) []string {
+func walkNearHome(ctx context.Context, home string) []string {
 	var out []string
 	level := []string{home}
-	for depth := range worktreeHolderDepth {
+	listed := 0
+	for depth := range discoverDepth {
 		var next []string
 		for _, dir := range level {
-			if ctx.Err() != nil {
+			listed++
+			if ctx.Err() != nil || listed > discoverDirCap {
 				return out
 			}
 			entries, err := os.ReadDir(dir)
 			if err != nil {
 				continue
 			}
+			if depth > 0 && slices.ContainsFunc(entries, func(e os.DirEntry) bool { return provider.IsGitMarkerName(e.Name()) }) {
+				out = append(out, dir)
+				continue
+			}
 			for _, e := range entries {
 				name := e.Name()
-				if strings.HasPrefix(name, ".") || (depth == 0 && slices.ContainsFunc(skippedHomeDirs, func(s string) bool { return strings.EqualFold(s, name) })) {
+				if strings.HasPrefix(name, ".") || name == "node_modules" || (depth == 0 && slices.ContainsFunc(skippedHomeDirs, func(s string) bool { return strings.EqualFold(s, name) })) {
 					continue
 				}
 				path := filepath.Join(dir, name)
-				// A symlink to a directory counts; DirEntry.IsDir does not follow it.
 				if info, statErr := os.Stat(path); statErr != nil || !info.IsDir() {
 					continue
 				}
@@ -94,6 +112,18 @@ func walkWorktreeHolders(ctx context.Context, home string) []string {
 	return out
 }
 
+// dockerDesktopPaths returns the Docker Desktop VM data locations under home.
+func dockerDesktopPaths(home string) []string {
+	if home == "" {
+		return nil
+	}
+	var out []string
+	for _, parts := range dockerDesktopData {
+		out = append(out, filepath.Join(append([]string{home}, parts...)...))
+	}
+	return out
+}
+
 // ScanProtected measures the protected locations that exist: the configured
 // list plus worktrees directories near home. It stops at budget or when ctx
 // is cancelled, and reports sizes found so far as lower bounds.
@@ -104,7 +134,8 @@ func ScanProtected(ctx context.Context, cfg *config.Config, home string, budget 
 		defer cancel()
 	}
 
-	candidates := append(append(ProtectedPaths(cfg, home), protectedRoots(home)...), WorktreeHolders(ctx, home)...)
+	candidates := append(append(ProtectedPaths(cfg, home), protectedRoots(home)...), dockerDesktopPaths(home)...)
+	candidates = append(candidates, WorktreeHolders(ctx, home)...)
 	incomplete := ctx.Err() != nil
 
 	// Resolved, case-folded order puts a parent before its children, so

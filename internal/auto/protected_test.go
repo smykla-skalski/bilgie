@@ -147,7 +147,7 @@ func TestScanProtected_MeasuresExistingEntries(t *testing.T) {
 	mkdirFile(t, filepath.Join(home, "Downloads", "a.bin"), 300000)
 	mkdirFile(t, filepath.Join(home, "keep", "a.bin"), 100000)
 	mkdirFile(t, filepath.Join(home, "sideprojects", "worktrees", "r", "a.bin"), 200000)
-	mkdirFile(t, filepath.Join(home, "deep", "er", "worktrees", "a.bin"), 50000)
+	mkdirFile(t, filepath.Join(home, "deep", "er", "and", "deeper", "worktrees", "a.bin"), 50000)
 	cfg := &config.Config{Protected: []string{"~/keep", "~/missing"}}
 
 	report := ScanProtected(t.Context(), cfg, home, time.Minute)
