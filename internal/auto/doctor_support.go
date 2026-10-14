@@ -211,10 +211,14 @@ func ProtectionConflicts(
 		)
 		switch g := p.(type) {
 		case provider.ProtectionAware:
-			if _, root := p.(provider.RootGuarded); !root {
+			root, ok := p.(provider.RootGuarded)
+			if !ok {
 				continue
 			}
 			reason, ctxErr = rootReason(ctx, p, home, protected)
+			if reason == "" && ctxErr == nil {
+				reason = root.RootProblem()
+			}
 		case provider.PathGuarded:
 			reason, ctxErr = guardPaths(ctx, p, g, home, protected)
 		default:

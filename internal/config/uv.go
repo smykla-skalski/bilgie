@@ -138,7 +138,9 @@ func (p Provider) PathError() error {
 		if err != nil {
 			return fmt.Errorf("expand %q: %w", path, err)
 		}
-		if !IsAbsPortable(expanded) {
+		// Portable spellings such as \x or C:/x pass on another OS but stay
+		// relative to the working directory on this one.
+		if !filepath.IsAbs(expanded) {
 			return fmt.Errorf("path %q must be absolute or start with ~/", path)
 		}
 	}

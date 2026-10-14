@@ -134,7 +134,7 @@ func (p *UVProvider) Clean(ctx context.Context, opts CleanOptions) (CleanResult,
 	if reason := p.guardReason(); reason != "" {
 		return skipResult(reason), nil
 	}
-	if reason := p.rootReason(); reason != "" {
+	if reason := p.RootProblem(); reason != "" {
 		return skipResult(reason), nil
 	}
 	if !opts.DryRun {
@@ -214,10 +214,11 @@ func (p *UVProvider) acquireLock() (release func(), reason string) {
 	return release, ""
 }
 
-// rootReason refuses a non-empty directory that uv did not create: uv cache
-// clean empties whatever directory it is given, and a uv cache always holds a
-// CACHEDIR.TAG. A missing or empty directory has nothing to lose.
-func (p *UVProvider) rootReason() string {
+// RootProblem implements RootGuarded. It refuses a non-empty directory that uv
+// did not create: uv cache clean empties whatever directory it is given, and a
+// uv cache always holds a CACHEDIR.TAG. A missing or empty directory has
+// nothing to lose.
+func (p *UVProvider) RootProblem() string {
 	entries, err := os.ReadDir(p.dir)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -227,13 +228,11 @@ func (p *UVProvider) rootReason() string {
 	case len(entries) == 0:
 		return ""
 	case !validCacheDirTag(filepath.Join(p.dir, "CACHEDIR.TAG")):
-		return "not a uv cache (no valid CACHEDIR.TAG): " + p.dir
+		return "not a uv cache (no valid CACHEDIR.TAG): " + p.dir +
+			"; if a failed uv run removed the tag, delete the directory by hand"
 	}
 	return ""
 }
-
-// GuardsRoot implements RootGuarded.
-func (p *UVProvider) GuardsRoot() {}
 
 // childEnv pins uv to the directory bilgie measured and drops UV_NO_CACHE,
 // which would send uv to a throwaway directory.

@@ -162,9 +162,9 @@ func TestProvider_PathError(t *testing.T) {
 	for _, ok := range [][]string{nil, {abs}, {"~"}, {"~/x"}, {abs, "~/y/*"}} {
 		assert.NoError(t, Provider{Paths: ok}.PathError(), "%v", ok)
 	}
-	bad := [][]string{{"Documents"}, {"."}, {"a/../b"}, {abs, "rel"}, {"~user/x"}, {""}}
+	bad := [][]string{{"Documents"}, {"."}, {"a/../b"}, {abs, "rel"}, {"~user/x"}, {""}, {`\x\cache`}}
 	if runtime.GOOS != "windows" {
-		bad = append(bad, []string{`~\x`})
+		bad = append(bad, []string{`~\x`}, []string{`C:/x`}, []string{`C:\x`})
 	}
 	for _, paths := range bad {
 		err := Provider{Paths: paths}.PathError()

@@ -726,6 +726,30 @@ func TestUVProvider_FailureWithoutProgressStaysASkip(t *testing.T) {
 	assert.Contains(t, res.SkipReason, "nothing removed")
 }
 
+func TestProviders_PortableOnlyAbsolutePathsAreRejected(t *testing.T) {
+	isolateHome(t)
+	for _, spelled := range []string{`\x\cache`, `\\x`} {
+		p, err := NewProvider("mytool", config.Provider{Enabled: true, MaxSize: "1G", Paths: []string{spelled}, CleanCmd: "echo hi"})
+		if runtime.GOOS == "windows" && spelled == `\\x` {
+			continue
+		}
+		require.Error(t, err, spelled)
+		assert.Contains(t, err.Error(), "must be absolute or start with ~/")
+		assert.Nil(t, p)
+	}
+}
+
+func TestUVProvider_RootProblemNamesTheRecovery(t *testing.T) {
+	dir := filepath.Clean(t.TempDir())
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "leftover"), []byte("x"), 0o600))
+	p := newUVProvider(t, config.Provider{Paths: []string{dir}})
+
+	assert.Contains(t, p.RootProblem(), "delete the directory by hand")
+
+	writeUVTag(t, dir)
+	assert.Empty(t, p.RootProblem())
+}
+
 func TestStripVerbatimPrefix(t *testing.T) {
 	tests := map[string]string{
 		`\\?\C:\Users\me`:       `C:\Users\me`,

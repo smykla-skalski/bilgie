@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/smykla-skalski/bilgie/internal/cache"
@@ -26,7 +27,7 @@ func NewBaseProvider(name string, cfg config.Provider) (*BaseProvider, error) {
 		return nil, fmt.Errorf("expand paths: %w", err)
 	}
 	for _, path := range paths {
-		if !config.IsAbsPortable(path) {
+		if !filepath.IsAbs(path) {
 			return nil, fmt.Errorf("path %q must be absolute or start with ~/", path)
 		}
 	}

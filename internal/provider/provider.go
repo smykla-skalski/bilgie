@@ -64,8 +64,9 @@ type ProtectionAware interface {
 // cache directory they hand to a tool that empties it as a whole. The caller
 // checks that directory like any other provider path, without scanning below
 // it for checkouts: the provider verifies the directory's content itself.
+// RootProblem returns why the provider refuses the directory, or "".
 type RootGuarded interface {
-	GuardsRoot()
+	RootProblem() string
 }
 
 // PathGuarded is implemented by providers that work through many matched

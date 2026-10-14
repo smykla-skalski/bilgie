@@ -107,6 +107,19 @@ func TestProtectionConflicts_UVInsideCheckout(t *testing.T) {
 	assert.Empty(t, ProtectionConflicts(t.Context(), uvConfig(outside), home, provider.NewProvider))
 }
 
+func TestProtectionConflicts_UVWithoutTagIsReported(t *testing.T) {
+	home := sandboxHome(t)
+	src := filepath.Join(home, "src")
+	require.NoError(t, os.MkdirAll(src, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "notes.txt"), []byte("keep"), 0o600))
+
+	got := ProtectionConflicts(t.Context(), uvConfig(src), home, provider.NewProvider)
+
+	require.Len(t, got, 1)
+	assert.Equal(t, "uv", got[0].Provider)
+	assert.Contains(t, got[0].Reason, "not a uv cache")
+}
+
 func TestProtectionConflicts_ScanningProtectionAwareProvidersAreStillSkipped(t *testing.T) {
 	h := newHarness(t)
 	aware := h.addAware("project-artifacts", true)
