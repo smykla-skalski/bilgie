@@ -61,7 +61,7 @@ func newTree(t *testing.T, name string, cfg config.Provider) *TreeProvider {
 	p.imageOnly = false
 	p.spec.verify = nil
 	if p.busy != nil {
-		p.busy.listProcesses = func(context.Context) ([]string, error) { return nil, nil }
+		p.busy.listProcesses = listOf()
 	}
 	return p
 }
@@ -862,7 +862,7 @@ func TestTreeProvider_YarnSkipsWhileYarnRuns(t *testing.T) {
 		makePackage(t, filepath.Join(root, "v6", "npm-zzz-1"), 3, 80*day)
 		p := newTree(t, "yarn", config.Provider{Paths: []string{root}, MaxSize: "1", MaxAge: "30d"})
 		require.NotNil(t, p.busy)
-		p.busy.listProcesses = func(context.Context) ([]string, error) { return []string{cmdline}, nil }
+		p.busy.listProcesses = listOf(cmdline)
 
 		res, err := p.Clean(context.Background(), CleanOptions{Mode: CleanModeSmart})
 

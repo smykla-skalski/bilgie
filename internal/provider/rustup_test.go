@@ -235,7 +235,7 @@ func TestRustupProvider_SkipsWhenBusy(t *testing.T) {
 	p := newFakeRustupProvider(t, f)
 	p.busy = &busyGuard{
 		processes:     busyProcesses["rustup"],
-		listProcesses: func(context.Context) ([]string, error) { return []string{"/x/.cargo/bin/cargo +1.75.0 build"}, nil },
+		listProcesses: listOf("/x/.cargo/bin/cargo +1.75.0 build"),
 	}
 
 	res, err := p.Clean(context.Background(), CleanOptions{})

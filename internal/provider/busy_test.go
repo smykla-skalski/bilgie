@@ -88,7 +88,7 @@ func TestExcludeSelf(t *testing.T) {
 
 	t.Run("self and wrapper ancestors are dropped", func(t *testing.T) {
 		lines := excludeSelf(procs, 60, wanted)
-		assert.Equal(t, []string{"vim notes.txt"}, lines)
+		assert.Equal(t, []string{"vim notes.txt"}, commandLines(lines))
 		g := fakeGuard(lines, nil, nil)
 		assert.Empty(t, g.busyReason(context.Background()))
 	})
@@ -96,7 +96,7 @@ func TestExcludeSelf(t *testing.T) {
 	t.Run("real tool process still skips", func(t *testing.T) {
 		withTool := slices.Concat(procs, []osshim.Process{{PID: 80, PPID: 1, CommandLine: "/Users/me/.cargo/bin/cargo build"}})
 		g := fakeGuard(excludeSelf(withTool, 60, wanted), nil, nil)
-		assert.Equal(t, "cargo is running", g.busyReason(context.Background()))
+		assert.Contains(t, g.busyReason(context.Background()), "cargo is running")
 	})
 
 	t.Run("tool ancestor stays visible", func(t *testing.T) {
@@ -106,7 +106,7 @@ func TestExcludeSelf(t *testing.T) {
 			{PID: 60, PPID: 50, CommandLine: "target/debug/bilgie clean cargo"},
 		}
 		g := fakeGuard(excludeSelf(parentTool, 60, wanted), nil, nil)
-		assert.Equal(t, "cargo is running", g.busyReason(context.Background()))
+		assert.Contains(t, g.busyReason(context.Background()), "cargo is running")
 	})
 
 	t.Run("linux comm suffix does not defeat the wrapper check", func(t *testing.T) {
@@ -126,14 +126,14 @@ func TestExcludeSelf(t *testing.T) {
 		}
 		g := fakeGuard(excludeSelf(brew, 60, []string{"brew"}), nil, nil)
 		g.processes = []string{"brew"}
-		assert.Equal(t, "brew is running", g.busyReason(context.Background()))
+		assert.Contains(t, g.busyReason(context.Background()), "brew is running")
 
 		spaced := []osshim.Process{
 			{PID: 50, PPID: 0, CommandLine: "/Users/John Smith/.cargo/bin/cargo run"},
 			{PID: 60, PPID: 50, CommandLine: "bilgie clean cargo"},
 		}
 		g = fakeGuard(excludeSelf(spaced, 60, wanted), nil, nil)
-		assert.Equal(t, "cargo is running", g.busyReason(context.Background()))
+		assert.Contains(t, g.busyReason(context.Background()), "cargo is running")
 	})
 
 	t.Run("cycle among kept ancestors terminates", func(t *testing.T) {
@@ -147,7 +147,7 @@ func TestExcludeSelf(t *testing.T) {
 
 	t.Run("unknown pids and cycles are safe", func(t *testing.T) {
 		got := excludeSelf([]osshim.Process{{CommandLine: "cargo build"}}, 0, wanted)
-		assert.Equal(t, []string{"cargo build"}, got)
+		assert.Equal(t, []string{"cargo build"}, commandLines(got))
 		cyc := []osshim.Process{{PID: 5, PPID: 6, CommandLine: "a"}, {PID: 6, PPID: 5, CommandLine: "b"}}
 		assert.Empty(t, excludeSelf(cyc, 5, wanted))
 	})
@@ -201,7 +201,7 @@ func TestExcludeSelf_WrapperForms(t *testing.T) {
 			lines := excludeSelfFor(procs, 60, wanted, tt.windows)
 			g := fakeGuard(lines, nil, nil)
 			if tt.busy {
-				assert.Equal(t, "cargo is running", g.busyReason(context.Background()))
+				assert.Contains(t, g.busyReason(context.Background()), "cargo is running")
 			} else {
 				assert.Empty(t, lines)
 			}
@@ -232,11 +232,25 @@ func TestProcessLister_OmitsOwnProcess(t *testing.T) {
 	assert.Less(t, len(lines), len(all))
 }
 
-func fakeGuard(lines []string, listErr error, held map[string]bool) *busyGuard {
+// procsOf turns bare command lines into process rows.
+func procsOf(lines ...string) []osshim.Process {
+	procs := make([]osshim.Process, len(lines))
+	for i, l := range lines {
+		procs[i] = osshim.Process{CommandLine: l, Args: l}
+	}
+	return procs
+}
+
+// listOf is a process lister that returns the given command lines.
+func listOf(lines ...string) func(context.Context) ([]osshim.Process, error) {
+	return func(context.Context) ([]osshim.Process, error) { return procsOf(lines...), nil }
+}
+
+func fakeGuard(procs []osshim.Process, listErr error, held map[string]bool) *busyGuard {
 	return &busyGuard{
 		processes: []string{"cargo", "rustc"},
-		listProcesses: func(context.Context) ([]string, error) {
-			return lines, listErr
+		listProcesses: func(context.Context) ([]osshim.Process, error) {
+			return procs, listErr
 		},
 		lockHeld: func(path string) (bool, error) {
 			return held[path], nil
@@ -253,12 +267,12 @@ func TestBusyGuard_BusyReason(t *testing.T) {
 	})
 
 	t.Run("process running", func(t *testing.T) {
-		g := fakeGuard([]string{"zsh", "cargo build --release"}, nil, nil)
+		g := fakeGuard(procsOf("zsh", "cargo build --release"), nil, nil)
 		assert.Equal(t, "cargo is running", g.busyReason(ctx))
 	})
 
 	t.Run("no matching process", func(t *testing.T) {
-		g := fakeGuard([]string{"zsh", "vim main.go"}, nil, nil)
+		g := fakeGuard(procsOf("zsh", "vim main.go"), nil, nil)
 		assert.Empty(t, g.busyReason(ctx))
 	})
 
@@ -299,9 +313,7 @@ func TestCommandProvider_SkipsWhenToolRunning(t *testing.T) {
 		CleanCmd: "touch " + marker,
 	})
 	require.NoError(t, err)
-	p.busy.listProcesses = func(context.Context) ([]string, error) {
-		return []string{"/usr/local/go/bin/go build ./..."}, nil
-	}
+	p.busy.listProcesses = listOf("/usr/local/go/bin/go build ./...")
 
 	result, err := p.Clean(context.Background(), CleanOptions{})
 	require.NoError(t, err)
@@ -343,7 +355,7 @@ func TestCargoGuard_BlocksOnlyWhileLockHeld(t *testing.T) {
 	require.NotNil(t, g)
 
 	t.Run("long-running cargo without the lock is not busy", func(t *testing.T) {
-		g.listProcesses = func(context.Context) ([]string, error) {
+		g.listProcesses = func(context.Context) ([]osshim.Process, error) {
 			t.Fatal("process list must not be consulted")
 			return nil, nil
 		}
@@ -456,4 +468,150 @@ func TestCommandProvider_TimeoutConfig(t *testing.T) {
 		_, err = NewCommandProvider("t", cfg)
 		assert.Error(t, err, bad)
 	}
+}
+
+func TestGoGuard_AgesOutOnlyLongRunningRunAndTest(t *testing.T) {
+	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	ago := func(d time.Duration) time.Time { return now.Add(-d) }
+
+	tests := []struct {
+		name    string
+		line    string
+		started time.Time
+		want    string
+	}{
+		{"day-old go run does not block", "go run mock.go", ago(24 * time.Hour), ""},
+		{"day-old go test does not block", "/usr/local/go/bin/go test ./...", ago(19 * time.Hour), ""},
+		{"day-old go run behind -C does not block", "go -C /src/app run ./cmd/x", ago(24 * time.Hour), ""},
+		{"day-old go run behind -C= does not block", "go -C=/src/app run ./cmd/x", ago(24 * time.Hour), ""},
+		{"old go run under sh -c does not block", "sh -c go run mock.go", ago(24 * time.Hour), ""},
+		{"go run at the threshold does not block", "go run mock.go", ago(time.Hour), ""},
+		{"fresh go run blocks", "go run mock.go", ago(5 * time.Minute), "go is running (pid 7, up 5m0s)"},
+		{"go run just under the threshold blocks", "go run mock.go", ago(59 * time.Minute), "go is running (pid 7, up 59m0s)"},
+		{"go build in progress blocks", "go build ./...", ago(2 * time.Minute), "go is running (pid 7, up 2m0s)"},
+		{"day-old go build still blocks", "go build ./...", ago(24 * time.Hour), "go is running (pid 7, up 24h0m0s)"},
+		{"go mod download still blocks", "go mod download", ago(24 * time.Hour), "go is running (pid 7, up 24h0m0s)"},
+		{"go install still blocks", "go -C /src install ./cmd/x", ago(24 * time.Hour), "go is running (pid 7, up 24h0m0s)"},
+		{"old go run chained with go build blocks", "sh -c go run a.go && go build ./...", ago(24 * time.Hour), "go is running (pid 7, up 24h0m0s)"},
+		{"bare go blocks", "go", ago(24 * time.Hour), "go is running (pid 7, up 24h0m0s)"},
+		{"go with a trailing -C blocks", "go -C", ago(24 * time.Hour), "go is running (pid 7, up 24h0m0s)"},
+		{"unknown start time blocks", "go run mock.go", time.Time{}, "go is running (pid 7)"},
+		{"start time in the future blocks", "go run mock.go", now.Add(time.Hour), "go is running (pid 7, up -1h0m0s)"},
+	}
+	for _, name := range []string{"go-build", "go-mod"} {
+		for _, tt := range tests {
+			t.Run(name+"/"+tt.name, func(t *testing.T) {
+				g := newBusyGuard(name, []string{t.TempDir()})
+				require.NotNil(t, g)
+				g.now = func() time.Time { return now }
+				g.listProcesses = func(context.Context) ([]osshim.Process, error) {
+					return []osshim.Process{{PID: 7, CommandLine: tt.line, Args: tt.line, Started: tt.started}}, nil
+				}
+				assert.Equal(t, tt.want, g.busyReason(context.Background()))
+			})
+		}
+	}
+}
+
+func TestGoGuard_OldRunDoesNotHideAFreshBuild(t *testing.T) {
+	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	g := newBusyGuard("go-mod", []string{t.TempDir()})
+	require.NotNil(t, g)
+	g.now = func() time.Time { return now }
+	g.listProcesses = func(context.Context) ([]osshim.Process, error) {
+		return []osshim.Process{
+			{PID: 1, CommandLine: "go run mock.go", Started: now.Add(-24 * time.Hour)},
+			{PID: 2, CommandLine: "mise dev", Started: now.Add(-20 * time.Hour)},
+			{PID: 3, CommandLine: "go build ./...", Started: now.Add(-30 * time.Second)},
+		}, nil
+	}
+	assert.Equal(t, "go is running (pid 3, up 30s)", g.busyReason(context.Background()))
+}
+
+func TestOtherGuardsNeverAgeOut(t *testing.T) {
+	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	for name, line := range map[string]string{
+		"homebrew": "brew install go",
+		"uv":       "uv run script.py",
+		"yarn":     "yarn dev",
+	} {
+		t.Run(name, func(t *testing.T) {
+			g := newBusyGuard(name, []string{t.TempDir()})
+			require.NotNil(t, g)
+			assert.Nil(t, g.aging)
+			g.now = func() time.Time { return now }
+			g.lockHeld = func(string) (bool, error) { return false, nil }
+			g.listProcesses = func(context.Context) ([]osshim.Process, error) {
+				return []osshim.Process{{PID: 9, CommandLine: line, Started: now.Add(-48 * time.Hour)}}, nil
+			}
+			assert.Contains(t, g.busyReason(context.Background()), " is running (pid 9, up 48h0m0s)")
+		})
+	}
+}
+
+func TestGoGuard_WindowsImageNameAlwaysBlocks(t *testing.T) {
+	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	assert.False(t, goBusyAging.agedOut(
+		&osshim.Process{PID: 4, CommandLine: "go.exe", Started: now.Add(-48 * time.Hour)}, now),
+		"a listing without arguments cannot tell run from build")
+}
+
+func TestToolSubcommands(t *testing.T) {
+	tests := []struct {
+		line    string
+		windows bool
+		want    []string
+	}{
+		{"go run x.go", false, []string{"run"}},
+		{"/usr/local/go/bin/go -C dir test ./...", false, []string{"test"}},
+		{"sudo -u me go build", false, []string{"build"}},
+		{"'go run;", false, []string{"run"}},
+		{"xargs go vet ./... && go run a.go", false, []string{"vet", "run"}},
+		{"go", false, []string{""}},
+		{"go;", false, []string{""}},
+		{"vim main.go", false, nil},
+		{`C:\Go\bin\go.exe run x.go`, true, []string{"run"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.line, func(t *testing.T) {
+			assert.Equal(t, tt.want, toolSubcommands(tt.line, "go", tt.windows))
+		})
+	}
+}
+
+func TestCommandProvider_SkipReasonNamesBlockingProcess(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "ran")
+	p, err := NewCommandProvider("go-mod", config.Provider{
+		Enabled:  true,
+		Paths:    []string{t.TempDir()},
+		MaxSize:  "1G",
+		CleanCmd: "touch " + marker,
+	})
+	require.NoError(t, err)
+	p.busy.listProcesses = func(context.Context) ([]osshim.Process, error) {
+		return []osshim.Process{{PID: 4242, CommandLine: "go build ./...", Started: time.Now().Add(-3 * time.Minute)}}, nil
+	}
+
+	result, err := p.Clean(context.Background(), CleanOptions{})
+	require.NoError(t, err)
+	assert.Regexp(t, `^go is running \(pid 4242, up 3m\d+s\)$`, result.SkipReason)
+	assert.NoFileExists(t, marker)
+}
+
+func TestCommandProvider_DayOldGoRunDoesNotBlockCleaning(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "ran")
+	p, err := NewCommandProvider("go-mod", config.Provider{
+		Enabled:  true,
+		Paths:    []string{t.TempDir()},
+		MaxSize:  "1G",
+		CleanCmd: "touch " + marker,
+	})
+	require.NoError(t, err)
+	p.busy.listProcesses = func(context.Context) ([]osshim.Process, error) {
+		return []osshim.Process{{PID: 99, CommandLine: "go run mock.go", Started: time.Now().Add(-24 * time.Hour)}}, nil
+	}
+
+	result, err := p.Clean(context.Background(), CleanOptions{})
+	require.NoError(t, err)
+	assert.Empty(t, result.SkipReason)
 }

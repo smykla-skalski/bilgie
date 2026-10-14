@@ -706,13 +706,21 @@ failure. If the check itself fails, the provider is skipped too.
 
 | Provider | Skipped while |
 |----------|---------------|
-| `go-build`, `go-mod` | a `go` process runs |
+| `go-build`, `go-mod` | a `go` process runs, except a `go run` or `go test` that has been up for an hour or more (see below) |
 | `cargo` | `<cargo home>/.package-cache` or `.package-cache-mutate` is flock-held (a running build does not block) |
 | `gradle` | a `gradle` or `gradlew` process, or a Gradle daemon, runs |
 | `homebrew` | a `brew` process runs |
 | `yarn` | a `yarn` process runs (`yarn`, `yarn.js`, `yarnpkg`; any OS) |
 | `uv` | `<path>/.lock` is flock-held, or a `uv` process runs |
 | `mise` | a `mise` process runs `install`, `upgrade`, `prune` or `use` |
+
+A `go run` or `go test` process stays alive for as long as the program or test
+binary it started, long after its compile used the caches, so one that has been up
+for an hour or more no longer blocks `go-build` or `go-mod`. `go build`, `go mod
+download`, `go install` and every other `go` command block at any age, and so does
+a `go` process whose subcommand or start time cannot be read (the Windows process
+listing carries image names only). A skip names the blocking process, for example
+`go is running (pid 4242, up 3m12s)`.
 
 Busy detection errs toward skipping: any process whose command line contains
 the tool name counts, including wrappers such as `sudo` or `sh -c` (`mise` and `cargo`
