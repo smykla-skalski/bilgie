@@ -43,6 +43,14 @@ func TestDiagnose_Memory(t *testing.T) {
 			level:    OK,
 		},
 		{
+			name: "zero percent free memory is still a macOS reading",
+			mutate: withSwap(osshim.Memory{
+				SwapUsed: uint64(gib), SwapTotal: 2 * uint64(gib), FreePercent: 0,
+			}),
+			contains: []string{"swap 1.0 GiB of 2.0 GiB used, memory free 0%"},
+			level:    OK,
+		},
+		{
 			name: "swap under the threshold with Linux available memory",
 			mutate: withSwap(osshim.Memory{
 				SwapUsed: uint64(gib), SwapTotal: 2 * uint64(gib),
@@ -76,6 +84,7 @@ func TestDiagnose_Memory(t *testing.T) {
 				withSwap(osshim.Memory{SwapUsed: 20 * uint64(gib), SwapTotal: 24 * uint64(gib), FreePercent: 5})(in)
 			},
 			contains: []string{"(warning above 8.0 GiB)"},
+			hint:     "never kills processes",
 			details:  []string{"no process family with many copies or orphans found; check Activity Monitor or top for the largest memory users"},
 			level:    Warn,
 		},
@@ -86,6 +95,7 @@ func TestDiagnose_Memory(t *testing.T) {
 				in.FamiliesErr = errors.New("ps failed")
 			},
 			contains: []string{"(warning above 8.0 GiB)"},
+			hint:     "never kills processes",
 			details:  []string{"cannot list processes: ps failed"},
 			level:    Warn,
 		},
@@ -110,7 +120,11 @@ func TestDiagnose_Memory(t *testing.T) {
 			for _, want := range tt.contains {
 				assert.Contains(t, f.Message, want)
 			}
-			assert.Contains(t, f.Hint, tt.hint)
+			if tt.hint == "" {
+				assert.Empty(t, f.Hint)
+			} else {
+				assert.Contains(t, f.Hint, tt.hint)
+			}
 			for _, want := range tt.details {
 				assert.Contains(t, f.Details, want)
 			}
