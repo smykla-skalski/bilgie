@@ -347,7 +347,7 @@ func argsReach(proc toolProcess, dirs ...string) bool {
 }
 
 func fieldsReach(fields []string, cwd string, dirs []string) bool {
-	for _, spellings := range argPaths(fields, cwd) {
+	for _, spellings := range argPaths(fields, cwd, false) {
 		for _, spelling := range spellings {
 			for _, dir := range dirs {
 				if dir != "" && pathWithin(spelling, dir) {
@@ -359,9 +359,17 @@ func fieldsReach(fields []string, cwd string, dirs []string) bool {
 	return false
 }
 
+// valueOfOtherFlag reports whether prev is an option that takes a value and
+// does not select a project, so the next token is not a path to one.
+func valueOfOtherFlag(prev string) bool {
+	prev = strings.Trim(prev, `"';&|()`)
+	return strings.HasPrefix(prev, "-") && !strings.Contains(prev, "=") && !slices.Contains(pathFlags, prev)
+}
+
 // argPaths returns, for each path-like argument, its spellings resolved
-// against cwd: lexical and, when it exists, symlink-resolved.
-func argPaths(fields []string, cwd string) [][]string {
+// against cwd: lexical and, when it exists, symlink-resolved. Strict mode
+// drops bare words and values of options that do not select a project.
+func argPaths(fields []string, cwd string, strict bool) [][]string {
 	var out [][]string
 	for i, field := range fields {
 		tok := strings.Trim(field, `"';&|()`)
@@ -377,7 +385,9 @@ func argPaths(fields []string, cwd string) [][]string {
 				value = strings.Trim(fields[i+1], `"';&|()`)
 			}
 			tok = value
-		} else if !strings.ContainsAny(tok, `/\`) && !strings.HasPrefix(tok, ".") && !existsBelow(cwd, tok) {
+		} else if !strings.ContainsAny(tok, `/\`) && !strings.HasPrefix(tok, ".") && (strict || !existsBelow(cwd, tok)) {
+			continue
+		} else if strict && i > 0 && valueOfOtherFlag(fields[i-1]) {
 			continue
 		}
 		if tok == "" {
@@ -398,16 +408,18 @@ func argPaths(fields []string, cwd string) [][]string {
 
 // holdsFromAbove reports whether a build tool run from a directory above the
 // project, inside the scan root, holds it: `cd ~/code && cargo build` builds
-// whatever manifest sits below. Any path argument that resolves outside the
-// project means the tool works elsewhere, so it holds only that target.
+// whatever manifest sits below. A project selector or script path that
+// resolves inside the scan root but outside the project means the tool works
+// elsewhere, so it holds only that target. Paths outside the scan root, such
+// as a launcher script or a target dir, say nothing about the project.
 func holdsFromAbove(proc toolProcess, proj *project) bool {
 	if proc.Cwd == "" || proj.root == "" || proc.Cwd == proj.Dir ||
 		!pathWithin(proj.Dir, proc.Cwd) || !pathWithin(proc.Cwd, proj.root) {
 		return false
 	}
 	for _, fields := range [][]string{splitQuoted(proc.CommandLine), strings.Fields(proc.CommandLine)} {
-		for _, spellings := range argPaths(fields, proc.Cwd) {
-			if isToolPath(spellings[0]) {
+		for _, spellings := range argPaths(fields, proc.Cwd, true) {
+			if isToolPath(spellings[0]) || !pathWithin(spellings[0], proj.root) {
 				continue
 			}
 			if !slices.ContainsFunc(spellings, func(sp string) bool { return pathWithin(sp, proj.Dir) }) {
