@@ -211,6 +211,7 @@ func (p *ProjectArtifactsProvider) Clean(ctx context.Context, opts CleanOptions)
 	pass := p.newPass(ctx, scan)
 	pass.cands = pass.candidates(ctx)
 	pass.dryRun = opts.DryRun
+	pass.allowIgnored = opts.Critical
 	remaining := scan.total()
 	var freed int64
 	started := p.now()
@@ -357,6 +358,8 @@ type pass struct {
 	procs    []toolProcess
 	procsErr error
 	dirty    map[string]string
+	// allowIgnored lets git-ignored artifacts through a dirty repository.
+	allowIgnored bool
 
 	cands     []*candidate
 	firstSkip string
@@ -589,10 +592,17 @@ func (p *ProjectArtifactsProvider) scan(ctx context.Context) (*artifactScan, err
 type candidate struct {
 	art  *artifactDir
 	proj *project
+	// dirtyAllowed marks an artifact let through a dirty repository
+	// because git ignores it.
+	dirtyAllowed bool
 }
 
 func (c *candidate) detail(now time.Time) string {
-	return fmt.Sprintf("%s, project %s, idle %dd", c.art.Kind, filepath.Base(c.proj.Dir), idleDays(now, latest(c.proj.newest, c.art.used)))
+	d := fmt.Sprintf("%s, project %s, idle %dd", c.art.Kind, filepath.Base(c.proj.Dir), idleDays(now, latest(c.proj.newest, c.art.used)))
+	if c.dirtyAllowed {
+		d += ", allowed despite uncommitted changes"
+	}
+	return d
 }
 
 func idleDays(now, then time.Time) int {
@@ -667,5 +677,13 @@ func (ps *pass) guard(ctx context.Context, c *candidate) string {
 	if reason := ps.busyReason(c); reason != "" {
 		return reason
 	}
-	return ps.dirtyReason(ctx, c.proj)
+	reason := ps.dirtyReason(ctx, c.proj)
+	if reason != reasonDirty || !ps.allowIgnored {
+		return reason
+	}
+	if reason := ps.ignoredReason(ctx, c); reason != "" {
+		return reason
+	}
+	c.dirtyAllowed = true
+	return ""
 }

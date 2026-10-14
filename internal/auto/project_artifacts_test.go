@@ -94,3 +94,33 @@ func TestSortByRebuildCost_ProjectArtifactsAfterCaches(t *testing.T) {
 	sortByRebuildCost(names)
 	assert.Equal(t, []string{"npm", "go-build", "xcode-deriveddata", "project-artifacts"}, names)
 }
+
+func TestRun_CriticalOptionFollowsTier(t *testing.T) {
+	tests := []struct {
+		name string
+		free int64
+		want bool
+	}{
+		{"low", 100 * gib, false},
+		{"critical", 8 * gib, true},
+		{"emergency", 1 * gib, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.addAware("project-artifacts", true)
+
+			_, err := h.run(false, tt.free, tt.free, 400*gib)
+
+			require.NoError(t, err)
+			require.Len(t, h.opts, 1)
+			assert.Equal(t, tt.want, h.opts[0].Critical)
+		})
+	}
+
+	h := newHarness(t)
+	h.addAware("project-artifacts", true)
+	_, err := h.run(false, 400*gib)
+	require.NoError(t, err)
+	assert.False(t, h.opts[0].Critical)
+}

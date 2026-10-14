@@ -452,6 +452,35 @@ func splitQuoted(s string) []string {
 	return fields
 }
 
+const reasonDirty = "uncommitted changes"
+
+// ignoredReason decides whether an artifact in a dirty repository may go
+// anyway: git must ignore the directory and nothing in it may be tracked or
+// untracked-but-not-ignored. Any git failure keeps the artifact.
+func (ps *pass) ignoredReason(ctx context.Context, c *candidate) string {
+	p, root := ps.p, c.proj.repoRoot
+	rel, err := filepath.Rel(root, c.art.Path)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return reasonDirty
+	}
+	if _, err := p.git(ctx, root, "check-ignore", "-q", "--", rel); err != nil {
+		if ctx.Err() != nil {
+			return "cancelled"
+		}
+		return reasonDirty
+	}
+	out, err := p.git(ctx, root, "ls-files", "--cached", "--others", "--exclude-standard", "--", rel)
+	switch {
+	case ctx.Err() != nil:
+		return "cancelled"
+	case err != nil:
+		return "git ls-files failed: " + err.Error()
+	case strings.TrimSpace(out) != "":
+		return reasonDirty
+	}
+	return ""
+}
+
 // dirtyReason skips projects whose git tree has uncommitted changes. Git
 // missing or failing skips the project too. One status per repository.
 func (ps *pass) dirtyReason(ctx context.Context, proj *project) string {
@@ -470,7 +499,7 @@ func (ps *pass) dirtyReason(ctx context.Context, proj *project) string {
 	case err != nil:
 		reason = "git status failed: " + err.Error()
 	case strings.TrimSpace(out) != "":
-		reason = "uncommitted changes"
+		reason = reasonDirty
 	}
 	ps.dirty[proj.repoRoot] = reason
 	return reason

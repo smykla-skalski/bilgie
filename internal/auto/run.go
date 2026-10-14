@@ -363,6 +363,7 @@ func runCandidate(ctx context.Context, cfg *config.Config, c *candidate, tier Ti
 	}
 	if tier != TierOK {
 		opts.Recovered = recoveredFunc(cfg, deps, dryRun)
+		opts.Critical = tier >= TierCritical
 	}
 	out, err := p.Clean(ctx, opts)
 	res.Output = strings.TrimSpace(out.Output)

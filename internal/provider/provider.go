@@ -79,6 +79,10 @@ type CleanOptions struct {
 	// small steps call it with the bytes freed so far and stop once it
 	// reports true. Providers that cannot ignore it.
 	Recovered func(freed int64) bool
+	// Critical is set at the critical and emergency pressure tiers.
+	// project-artifacts then cleans git-ignored artifacts in repositories
+	// with uncommitted changes.
+	Critical bool
 }
 
 // CleanResult contains cleaning operation results.

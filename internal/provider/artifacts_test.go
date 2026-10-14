@@ -72,6 +72,14 @@ type artifactHarness struct {
 	p     *ProjectArtifactsProvider
 	git   []string
 	dirty map[string]bool
+	// gitOut answers non-status git calls as (output, error) keyed by the
+	// subcommand; a missing key succeeds with no output.
+	gitOut map[string]gitAnswer
+}
+
+type gitAnswer struct {
+	out string
+	err error
 }
 
 func newArtifactHarness(t *testing.T, mutate func(*config.Provider)) *artifactHarness {
@@ -91,13 +99,17 @@ func newArtifactHarness(t *testing.T, mutate func(*config.Provider)) *artifactHa
 	p, err := NewProjectArtifactsProvider("project-artifacts", cfg)
 	require.NoError(t, err)
 
-	h := &artifactHarness{t: t, root: root, p: p, dirty: map[string]bool{}}
+	h := &artifactHarness{t: t, root: root, p: p, dirty: map[string]bool{}, gitOut: map[string]gitAnswer{}}
 	p.home = filepath.Join(t.TempDir(), "home")
 	p.openCheck = func(context.Context, string) (bool, error) { return false, nil }
 	p.openMany = nil
 	p.processes = func(context.Context) ([]toolProcess, error) { return nil, nil }
 	p.git = func(_ context.Context, dir string, args ...string) (string, error) {
 		h.git = append(h.git, dir+" "+strings.Join(args, " "))
+		if len(args) > 0 && args[0] != "status" {
+			a := h.gitOut[args[0]]
+			return a.out, a.err
+		}
 		if h.dirty[dir] {
 			return " M file.go\n", nil
 		}
@@ -1345,4 +1357,89 @@ func TestNewProjectArtifactsProvider_AcceptsMillisecondBudgets(t *testing.T) {
 		Paths: []string{t.TempDir()}, MaxSize: "1G", MinIdle: "10ms",
 	})
 	require.Error(t, err)
+}
+
+func dirtyIgnoredHarness(t *testing.T) *artifactHarness {
+	t.Helper()
+	h := newArtifactHarness(t, nil)
+	rustProject(t, h.path("api"), 100, 90*day)
+	gitRepo(t, h.path("api"), 90*day)
+	h.dirty[evalDir(t, h.path("api"))] = true
+	return h
+}
+
+func TestProjectArtifacts_DirtyRepoIgnoredArtifactCleanedUnderPressure(t *testing.T) {
+	h := dirtyIgnoredHarness(t)
+
+	res := h.clean(CleanOptions{Mode: CleanModeFull, Critical: true})
+
+	assert.NoDirExists(t, h.path("api", "target"))
+	require.Len(t, res.Entries, 1)
+	assert.Contains(t, res.Entries[0].Detail, "allowed despite uncommitted changes")
+}
+
+func TestProjectArtifacts_DirtyRepoIgnoredArtifactMarkedInDryRun(t *testing.T) {
+	h := dirtyIgnoredHarness(t)
+
+	res := h.clean(CleanOptions{Mode: CleanModeFull, Critical: true, DryRun: true})
+
+	assert.DirExists(t, h.path("api", "target"))
+	assert.Contains(t, res.Output, "would remove")
+	assert.Contains(t, res.Output, "allowed despite uncommitted changes")
+}
+
+func TestProjectArtifacts_DirtyRepoStaysSkippedBelowCritical(t *testing.T) {
+	h := dirtyIgnoredHarness(t)
+
+	res := h.clean(CleanOptions{Mode: CleanModeFull})
+
+	assert.DirExists(t, h.path("api", "target"))
+	assert.Contains(t, res.Output, "uncommitted changes")
+	for _, call := range h.git {
+		assert.Contains(t, call, "status --porcelain")
+	}
+}
+
+func TestProjectArtifacts_DirtyRepoKeepsArtifactWhenNotSafelyIgnored(t *testing.T) {
+	tests := []struct {
+		name    string
+		answers map[string]gitAnswer
+		reason  string
+	}{
+		{"not ignored", map[string]gitAnswer{"check-ignore": {err: errors.New("exit status 1")}}, "uncommitted changes"},
+		{"tracked or unignored file inside", map[string]gitAnswer{"ls-files": {out: "target/keep.rs\n"}}, "uncommitted changes"},
+		{"file listing fails", map[string]gitAnswer{"ls-files": {err: errors.New("boom")}}, "git ls-files failed"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := dirtyIgnoredHarness(t)
+			h.gitOut = tt.answers
+
+			res := h.clean(CleanOptions{Mode: CleanModeFull, Critical: true})
+
+			assert.DirExists(t, h.path("api", "target"))
+			assert.Contains(t, res.Output, tt.reason)
+			assert.Equal(t, 1, res.SkippedEntries)
+		})
+	}
+}
+
+func TestProjectArtifacts_DirtyIgnoredStillHonorsOtherGuards(t *testing.T) {
+	h := dirtyIgnoredHarness(t)
+	h.p.processes = func(context.Context) ([]toolProcess, error) {
+		return []toolProcess{{Tool: "cargo", CommandLine: "cargo build", Cwd: h.path("api")}}, nil
+	}
+
+	res := h.clean(CleanOptions{Mode: CleanModeFull, Critical: true})
+
+	assert.DirExists(t, h.path("api", "target"))
+	assert.Equal(t, 1, res.SkippedEntries)
+
+	h = dirtyIgnoredHarness(t)
+	h.p.openCheck = func(context.Context, string) (bool, error) { return true, nil }
+
+	res = h.clean(CleanOptions{Mode: CleanModeFull, Critical: true})
+
+	assert.DirExists(t, h.path("api", "target"))
+	assert.Equal(t, 1, res.SkippedEntries)
 }

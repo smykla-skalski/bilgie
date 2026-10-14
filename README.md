@@ -193,6 +193,9 @@ An artifact is skipped, with the reason in `--verbose` output, when:
   cleaned, the worktree itself is never deleted
 - the project is not idle yet
 - the git tree is dirty (`git status --porcelain` is non-empty, or git is missing or fails).
+  At the critical and emergency tiers a dirty repository still gives up an artifact directory
+  that git ignores and that holds no tracked or unignored file; a failed ignore check keeps it,
+  and a dry-run marks it `allowed despite uncommitted changes`.
   Set `skip_if_dirty: false` to turn this off
 - a tool of that kind runs in the project: `cargo` or `rustc` for Rust, `node`, `npm`, `npx`,
   `pnpm`, `yarn` or `bun` for Node, `python`, `pip`, `uv` or `poetry` for Python (versioned and alternative interpreters such as
