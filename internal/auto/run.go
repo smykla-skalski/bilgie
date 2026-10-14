@@ -361,6 +361,7 @@ func runCandidate(ctx context.Context, cfg *config.Config, c *candidate, tier Ti
 		Mode:    provider.CleanModeSmart,
 		Timeout: DockerCleanTimeout,
 	}
+	opts.Pressure = pressureFor(tier)
 	if tier != TierOK {
 		opts.Recovered = recoveredFunc(cfg, deps, dryRun)
 	}
@@ -381,6 +382,19 @@ func runCandidate(ctx context.Context, cfg *config.Config, c *candidate, tier Ti
 		res.Status = StatusCleaned
 	}
 	return res
+}
+
+// pressureFor maps a tier to the pressure level providers scale their idle
+// thresholds by; only critical and emergency shorten them.
+func pressureFor(tier Tier) provider.Pressure {
+	switch {
+	case tier >= TierEmergency:
+		return provider.PressureEmergency
+	case tier == TierCritical:
+		return provider.PressureCritical
+	default:
+		return provider.PressureNone
+	}
 }
 
 // recoveredFunc tells a provider freeing space in steps when it can stop: free
