@@ -84,3 +84,18 @@ func TestNoFollowFlag_RefusesALinkSwappedInAfterTheCheck(t *testing.T) {
 
 	require.ErrorIs(t, err, errLoop)
 }
+
+func TestOpenFailuresAreReturned(t *testing.T) {
+	dir := t.TempDir()
+	locked := filepath.Join(dir, "locked")
+	require.NoError(t, os.WriteFile(locked, []byte("x"), 0o000))
+
+	_, err := OpenRegular(locked)
+	if os.Geteuid() != 0 {
+		require.ErrorIs(t, err, os.ErrPermission)
+		require.ErrorIs(t, WriteFileNoLink(locked, []byte("y"), 0o600), os.ErrPermission)
+	}
+	require.Error(t, WriteFileNoLink(filepath.Join(dir, "no-such-dir", "f"), []byte("y"), 0o600))
+	_, err = OpenAppendNoLink(filepath.Join(dir, "no-such-dir", "f"), 0o600)
+	require.Error(t, err)
+}

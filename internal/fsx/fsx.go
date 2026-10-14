@@ -71,15 +71,11 @@ func WriteFileNoLink(path string, data []byte, perm os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	if err := f.Truncate(0); err != nil {
-		_ = f.Close()
-		return err
+	err = f.Truncate(0)
+	if err == nil {
+		_, err = f.Write(data)
 	}
-	if _, err := f.Write(data); err != nil {
-		_ = f.Close()
-		return err
-	}
-	return f.Close()
+	return errors.Join(err, f.Close())
 }
 
 // OpenAppendNoLink opens a regular file for reading and appending, creating
