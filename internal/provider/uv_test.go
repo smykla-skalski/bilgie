@@ -823,3 +823,16 @@ func TestPathWithin_VerbatimSpellingMatchesPlainRoot(t *testing.T) {
 		assert.True(t, pathWithin(`\\?\UNC\host\share\x`, `\\host\share`))
 	}
 }
+
+func TestUVProvider_UnreadableCacheDirIsRefused(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("directory permissions are not enforced here")
+	}
+	dir := filepath.Join(filepath.Clean(t.TempDir()), "uv")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.Chmod(dir, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	p := newUVProvider(t, config.Provider{Paths: []string{dir}})
+
+	assert.Contains(t, p.RootProblem(), "cannot verify")
+}
