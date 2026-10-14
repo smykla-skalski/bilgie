@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -161,4 +162,75 @@ func TestNewProvider_CodexSessions(t *testing.T) {
 	p, err := NewProvider("codex-sessions", config.DefaultProvidersFor(config.Platform{OS: config.OSDarwin, Home: t.TempDir()})["codex-sessions"])
 	require.NoError(t, err)
 	assert.IsType(t, &CodexSessionsProvider{}, p)
+}
+
+func TestCodexSessions_RemovalFailureIsAnError(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("directory permissions are not enforced")
+	}
+	root := t.TempDir()
+	dir := filepath.Join(root, "a")
+	old := writeRollout(t, dir, "rollout-a.jsonl", 100, 100*day)
+	require.NoError(t, os.Chmod(dir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	res, err := newCodexProvider(t, root, "30d").Clean(context.Background(), CleanOptions{})
+
+	require.Error(t, err)
+	assert.FileExists(t, old)
+	assert.Zero(t, res.FilesDeleted)
+	assert.Contains(t, res.Output, "error removing")
+}
+
+func TestCodexSessions_CancelledDuringOpenCheck(t *testing.T) {
+	root := t.TempDir()
+	old := writeRollout(t, root, "rollout-a.jsonl", 100, 100*day)
+	ctx, cancel := context.WithCancel(context.Background())
+	p := newCodexProvider(t, root, "30d")
+	p.openMany = func(context.Context, []string) (map[string]bool, error) {
+		cancel()
+		return map[string]bool{}, nil
+	}
+
+	res, err := p.Clean(ctx, CleanOptions{})
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, "interrupted", res.Output)
+	assert.FileExists(t, old)
+}
+
+func TestCodexSessions_UnreadableDirectoryIsAnError(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("directory permissions are not enforced")
+	}
+	root := t.TempDir()
+	dir := filepath.Join(root, "locked")
+	writeRollout(t, dir, "rollout-a.jsonl", 100, 100*day)
+	require.NoError(t, os.Chmod(dir, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	p := newCodexProvider(t, root, "30d")
+
+	_, err := p.Clean(context.Background(), CleanOptions{})
+	require.Error(t, err)
+
+	_, err = p.CurrentSize(context.Background())
+	require.Error(t, err)
+}
+
+func TestCodexSessions_FileVanishingBeforeRemovalIsIgnored(t *testing.T) {
+	root := t.TempDir()
+	old := writeRollout(t, root, "rollout-a.jsonl", 100, 100*day)
+	p := newCodexProvider(t, root, "30d")
+	p.openMany = func(_ context.Context, paths []string) (map[string]bool, error) {
+		for _, path := range paths {
+			require.NoError(t, os.Remove(path))
+		}
+		return map[string]bool{}, nil
+	}
+
+	res, err := p.Clean(context.Background(), CleanOptions{})
+
+	require.NoError(t, err)
+	assert.NoFileExists(t, old)
+	assert.Zero(t, res.FilesDeleted)
 }
