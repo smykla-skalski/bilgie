@@ -3,6 +3,7 @@
 package osshim
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -48,4 +49,38 @@ func TestProcessStartFromProcRejectsBrokenStat(t *testing.T) {
 
 	_, _, err := processStartFromProc(root, 7)
 	require.Error(t, err)
+}
+
+func TestProcessStartFromProcRejectsUnusableFiles(t *testing.T) {
+	tests := []struct {
+		name  string
+		stat  string
+		btime string
+	}{
+		{"no command name end", "9 broken\n", "btime 1000000\n"},
+		{"ticks not a number", "9 (x) S 1 1 1 0 -1 0 0 0 0 0 1 1 0 0 20 0 1 0 soon 0\n", "btime 1000000\n"},
+		{"btime missing", "9 (x) S 1 1 1 0 -1 0 0 0 0 0 1 1 0 0 20 0 1 0 5 0\n", "cpu 1\n"},
+		{"btime not a number", "9 (x) S 1 1 1 0 -1 0 0 0 0 0 1 1 0 0 20 0 1 0 5 0\n", "btime later\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(root, "stat"), []byte(tt.btime), 0o600))
+			require.NoError(t, os.MkdirAll(filepath.Join(root, "9"), 0o750))
+			require.NoError(t, os.WriteFile(filepath.Join(root, "9", "stat"), []byte(tt.stat), 0o600))
+
+			_, running, err := processStartFromProc(root, 9)
+			require.Error(t, err)
+			assert.False(t, running)
+		})
+	}
+}
+
+func TestProcessStartHonoursCancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	_, running, err := processStart(ctx, os.Getpid())
+	require.ErrorIs(t, err, context.Canceled)
+	assert.False(t, running)
 }
