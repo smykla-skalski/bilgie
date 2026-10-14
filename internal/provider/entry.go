@@ -72,7 +72,7 @@ func (p *EntryProvider) Clean(ctx context.Context, opts CleanOptions) (CleanResu
 			// RemoveAll may have deleted part of the tree before failing.
 			if part := p.partiallyFreed(ctx, e); part > 0 {
 				freed += part
-				removedEntries = append(removedEntries, Entry{Path: e.path, Size: part})
+				removedEntries = append(removedEntries, Entry{Path: e.path, Size: part, Detail: "partly removed"})
 			}
 			continue
 		}
