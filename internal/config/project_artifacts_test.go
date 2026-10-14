@@ -42,6 +42,7 @@ func TestProjectArtifactsValidation(t *testing.T) {
 		{"relative root", func(p *Provider) { p.Paths = []string{"code"} }, "absolute"},
 		{"negative depth", func(p *Provider) { p.MaxDepth = -1 }, "max_depth"},
 		{"too deep", func(p *Provider) { p.MaxDepth = MaxProjectDepth + 1 }, "max_depth"},
+		{"bad trim_idle", func(p *Provider) { p.TrimIdle = "soon" }, "trim_idle"},
 		{"bad min_idle", func(p *Provider) { p.MinIdle = "soon" }, "min_idle"},
 		{"zero scan_budget", func(p *Provider) { p.ScanBudget = "0s" }, "scan_budget"},
 		{"valid tuning", func(p *Provider) { p.MaxDepth, p.ScanBudget, p.MinIdle = 6, "30s", "14d" }, ""},
@@ -110,6 +111,7 @@ providers:
   project-artifacts:
     python: true
     min_idle: 14d
+    trim_idle: 7d
     paths: [~/mycode, ~/other]
 `), 0o600))
 	loader := NewLoader()
@@ -122,6 +124,7 @@ providers:
 	got := cfg.Providers["project-artifacts"]
 	assert.Equal(t, []string{"~/mycode", "~/other"}, got.Paths)
 	assert.Equal(t, "14d", got.MinIdle)
+	assert.Equal(t, "7d", got.TrimIdle)
 	assert.True(t, got.Enabled)
 	assert.Equal(t, TypeProjectArtifacts, got.Type)
 	require.NotNil(t, got.Python)

@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -163,4 +164,87 @@ func TestNewProjectArtifactsProvider_RejectsBadTrimIdle(t *testing.T) {
 		Type: config.TypeProjectArtifacts, Paths: []string{t.TempDir()}, MaxSize: "1G", TrimIdle: "soon", Enabled: true,
 	})
 	require.ErrorContains(t, err, "trim_idle")
+}
+
+func TestUnitSuffix(t *testing.T) {
+	tests := map[string]string{
+		"serde-0123456789abcdef":      "0123456789abcdef",
+		"my-crate-0123456789abcdef":   "0123456789abcdef",
+		"serde":                       "",
+		"serde-short":                 "",
+		"serde-0123456789abcdefextra": "",
+	}
+	for name, want := range tests {
+		assert.Equal(t, want, unitSuffix(name), name)
+	}
+}
+
+func TestProjectArtifacts_TrimDropsOrphanDepsFilesByAge(t *testing.T) {
+	h := newArtifactHarness(t, nil)
+	_, debug := activeRustProject(t, h, "api")
+	oldOrphan := filepath.Join(debug, "deps", "liborphan-cccccccccccccccc.rlib")
+	newOrphan := filepath.Join(debug, "deps", "libnewer-dddddddddddddddd.rlib")
+	writeFile(t, oldOrphan, "o")
+	writeFile(t, newOrphan, "n")
+	ancient := time.Now().Add(-60 * day)
+	require.NoError(t, os.Chtimes(oldOrphan, ancient, ancient))
+	writeFile(t, filepath.Join(debug, "deps", "README"), "no hash")
+
+	h.clean(CleanOptions{Mode: CleanModeFull})
+
+	assert.NoFileExists(t, oldOrphan)
+	assert.FileExists(t, newOrphan)
+	assert.FileExists(t, filepath.Join(debug, "deps", "README"))
+}
+
+func TestProjectArtifacts_TrimWorksWithoutDepsOrIncremental(t *testing.T) {
+	h := newArtifactHarness(t, nil)
+	_, debug := activeRustProject(t, h, "api")
+	require.NoError(t, os.RemoveAll(filepath.Join(debug, "deps")))
+	require.NoError(t, os.RemoveAll(filepath.Join(debug, "incremental")))
+
+	res := h.clean(CleanOptions{Mode: CleanModeFull})
+
+	assert.NoDirExists(t, filepath.Join(debug, ".fingerprint", "old-"+oldHash))
+	assert.Len(t, res.Entries, 1)
+}
+
+func TestProjectArtifacts_TrimStopsOnceSmartCleanIsSatisfied(t *testing.T) {
+	h := newArtifactHarness(t, func(c *config.Provider) { c.MaxSize = "1G" })
+	_, debug := activeRustProject(t, h, "api")
+
+	res := h.clean(CleanOptions{Mode: CleanModeSmart})
+
+	assert.FileExists(t, filepath.Join(debug, "deps", "libold-"+oldHash+".rlib"))
+	assert.Empty(t, res.Entries)
+}
+
+func TestProjectArtifacts_TrimIgnoresTargetWithoutProfiles(t *testing.T) {
+	h := newArtifactHarness(t, nil)
+	target, debug := activeRustProject(t, h, "api")
+	require.NoError(t, os.RemoveAll(debug))
+	writeFile(t, filepath.Join(target, "stray.txt"), "x")
+
+	res := h.clean(CleanOptions{Mode: CleanModeFull})
+
+	assert.Empty(t, res.Entries)
+	assert.Equal(t, 1, res.SkippedEntries)
+}
+
+func TestTrimTarget_StopsOnCancelledContext(t *testing.T) {
+	h := newArtifactHarness(t, nil)
+	target, debug := activeRustProject(t, h, "api")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, _, err := h.p.trimTarget(ctx, target, false)
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.FileExists(t, filepath.Join(debug, "deps", "libold-"+oldHash+".rlib"))
+}
+
+func TestTrimProfile_FailsWithoutFingerprintDir(t *testing.T) {
+	_, err := trimProfile(context.Background(), t.TempDir(), time.Now(), false)
+
+	require.Error(t, err)
 }
