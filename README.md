@@ -163,7 +163,7 @@ stops after
 level. A root that is home, a parent of home or the filesystem root is ignored, and the output
 says so: as a warning when other roots were scanned, as the skip reason when none was.
 
-A project is idle when all of these are older than `min_idle` (default 60 days): the newest
+A project is idle when all of these are older than `min_idle` (default 7 days): the newest
 mtime among files outside the artifacts and `.git` (a sample of the first 3000 entries, breadth
 first; a sample cut short skips the project, with or without git), and the git `HEAD` and reflog
 time. A folder that merely shares an artifact's name, such as `src/target/`, is source and is
@@ -238,7 +238,7 @@ providers:
   project-artifacts:
     paths: [~/sideprojects, ~/work]
     max_size: 20G
-    min_idle: 60d
+    min_idle: 7d
     max_depth: 4
     scan_budget: 10s
     pass_budget: 30s
@@ -540,7 +540,7 @@ providers:
 | `clean_cmd` | Command for full clean (empty = file-based deletion) |
 | `clean_timeout` | Max runtime of `clean_cmd` before it is cancelled and reported (default `2m`; units `ms`, `s`, `m`, `h`, `d`) |
 | `type` | `dir-pattern` removes whole stale directories matching a glob in `paths`; `project-artifacts` removes build artifacts of idle projects found below the roots in `paths` |
-| `min_idle` | `dir-pattern`: minimum idle time, from the newest mtime in the tree (default `2h`); `project-artifacts`: project idle time (default `60d`); units `m`, `h`, `d`, minimum `1m` |
+| `min_idle` | `dir-pattern`: minimum idle time, from the newest mtime in the tree (default `2h`); `project-artifacts`: project idle time (default `7d`); units `m`, `h`, `d`, minimum `1m` |
 | `skip_if_open` | `dir-pattern`, `project-artifacts`: skip directories with open files via `lsof +D` (default `true`) |
 | `skip_if_git_worktree` | `dir-pattern`: skip directories containing a `.git` entry (default `true`) |
 | `max_depth` | `project-artifacts`: directory levels searched below each root (default `4`, from 1 to 16; a negative value is an error) |
