@@ -399,36 +399,48 @@ func (a *busyAging) agedOut(p *osshim.Process, now time.Time) bool {
 	return true
 }
 
+// chdirFlag stands in for the subcommand of a "go -C dir ..." invocation. The
+// directory may hold spaces, which a process listing does not quote, so the
+// subcommand cannot be told from the path and the invocation stays busy.
+const chdirFlag = "-C"
+
 // toolSubcommands returns the subcommand that follows each occurrence of the
-// tool on a command line, with its leading "-C dir" flag skipped; an
-// occurrence with no subcommand yields "".
+// tool on a command line; an occurrence with no subcommand yields "". The
+// words after a subcommand are its arguments, so a later word that merely
+// names the tool ("go run ./cmd/go") is not another invocation until a shell
+// separator ends the command.
 func toolSubcommands(commandLine, tool string, windows bool) []string {
-	fields := strings.Fields(commandLine)
+	fields := strings.Fields(separatorWords.Replace(commandLine))
 	var subs []string
+	inArgs := false
 	for i, field := range fields {
+		if inArgs {
+			inArgs = !endsCommand(field)
+			continue
+		}
 		if fieldTool(field, windows) != tool {
 			continue
 		}
-		j := i + 1
-		for j < len(fields) {
-			next := trimField(fields[j])
-			if next == "-C" {
-				j += 2
-				continue
-			}
-			if strings.HasPrefix(next, "-C=") {
-				j++
-				continue
-			}
-			break
-		}
 		sub := ""
-		if j < len(fields) {
-			sub = trimField(fields[j])
+		if i+1 < len(fields) {
+			sub = trimField(fields[i+1])
+			if sub == "-C" || strings.HasPrefix(sub, "-C=") {
+				sub = chdirFlag
+			}
+			inArgs = !endsCommand(fields[i+1])
 		}
 		subs = append(subs, sub)
 	}
 	return subs
+}
+
+// separatorWords sets every shell separator apart as a word of its own, so a
+// glued "a.go|go build" shows both commands.
+var separatorWords = strings.NewReplacer(";", " ; ", "&", " ; ", "|", " ; ")
+
+// endsCommand reports whether a word is a shell command separator.
+func endsCommand(field string) bool {
+	return field == ";"
 }
 
 func trimField(field string) string {

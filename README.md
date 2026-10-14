@@ -718,7 +718,7 @@ A `go run` or `go test` process stays alive for as long as the program or test
 binary it started, long after its compile used the caches, so one that has been up
 for an hour or more no longer blocks `go-build` or `go-mod`. `go build`, `go mod
 download`, `go install` and every other `go` command block at any age, and so does
-a `go` process whose subcommand or start time cannot be read. On Windows the process
+`go -C <dir> ...` (the directory may hold spaces, so the subcommand is ambiguous) and a `go` process whose subcommand or start time cannot be read. On Windows the process
 listing carries image names only, so no `go` process ages out there. A skip names the blocking process, for example
 `go is running (pid 4242, up 3m12s)`.
 
