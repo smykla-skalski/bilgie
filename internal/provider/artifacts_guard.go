@@ -373,7 +373,8 @@ func argPaths(fields []string, cwd string, strict bool) [][]string {
 	var out [][]string
 	for i, field := range fields {
 		tok := strings.Trim(field, `"';&|()`)
-		if strings.HasPrefix(tok, "-") {
+		switch {
+		case strings.HasPrefix(tok, "-"):
 			flag, value, hasValue := strings.Cut(tok, "=")
 			if !slices.Contains(pathFlags, flag) {
 				continue
@@ -385,9 +386,9 @@ func argPaths(fields []string, cwd string, strict bool) [][]string {
 				value = strings.Trim(fields[i+1], `"';&|()`)
 			}
 			tok = value
-		} else if !strings.ContainsAny(tok, `/\`) && !strings.HasPrefix(tok, ".") && (strict || !existsBelow(cwd, tok)) {
+		case !strings.ContainsAny(tok, `/\`) && !strings.HasPrefix(tok, ".") && (strict || !existsBelow(cwd, tok)):
 			continue
-		} else if strict && i > 0 && valueOfOtherFlag(fields[i-1]) {
+		case strict && i > 0 && valueOfOtherFlag(fields[i-1]):
 			continue
 		}
 		if tok == "" {
