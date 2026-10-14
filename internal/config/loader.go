@@ -34,6 +34,9 @@ func (l *Loader) SetPlatform(p Platform) {
 
 // SetWarnWriter redirects load warnings (default stderr).
 func (l *Loader) SetWarnWriter(w io.Writer) {
+	if w == nil {
+		w = io.Discard
+	}
 	l.warn = w
 }
 
@@ -171,7 +174,7 @@ func (l *Loader) mergePaths(merged *Provider, name string, paths []string) {
 		merged.Paths = paths
 		return
 	}
-	if goos != legacyOS {
+	if goos != legacyOS && !slices.Equal(paths, merged.Paths) {
 		fmt.Fprintf(l.warn, "warning: providers.%s.paths equals the %s defaults and none exists here; "+
 			"using the %s defaults (remove paths to silence this)\n", name, goos, l.platform.OS)
 	}

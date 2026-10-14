@@ -682,6 +682,10 @@ func TestLoader_ReplacingAForeignDefaultWarns(t *testing.T) {
 			yaml: "providers:\n  sail-dirs:\n    paths: [/private/tmp/sail*]\n",
 		},
 		{
+			name: "own defaults that another OS shares are silent",
+			yaml: "providers:\n  npm:\n    paths: [~/.npm]\n",
+		},
+		{
 			name: "a custom list is kept silently",
 			yaml: "providers:\n  lima:\n    paths: [/opt/lima]\n",
 		},
@@ -707,6 +711,19 @@ func TestLoader_ReplacingAForeignDefaultWarns(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLoader_NilWarnWriterDoesNotPanic(t *testing.T) {
+	path := savedConfig(t, "version: \"1\"\nproviders:\n  lima:\n    paths: [~/Library/Caches/lima]\n")
+	loader := NewLoader()
+	loader.SetConfigPath(path)
+	loader.SetPlatform(Platform{OS: OSLinux, Home: "/home/u", TempDir: "/tmp", SystemTempDir: "/tmp"})
+	loader.pathsExist = func([]string) bool { return false }
+	loader.SetWarnWriter(nil)
+
+	_, err := loader.Load()
+
+	require.NoError(t, err)
 }
 
 func TestDefaultProvidersFor_RelativeTempDirFallsBackToTmp(t *testing.T) {
