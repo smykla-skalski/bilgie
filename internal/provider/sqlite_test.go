@@ -219,3 +219,56 @@ func TestSQLiteCompactRealDatabase(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "ok", verdict)
 }
+
+func TestSQLiteCompactTimeoutIsSkip(t *testing.T) {
+	fx := newSQLiteFixture(t, "1K", 1000, 600)
+	fx.provider.timeout = 1
+	fx.provider.run = func(ctx context.Context, _, _, _ string) (string, error) {
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+
+	res, err := fx.provider.Clean(t.Context(), CleanOptions{})
+	require.NoError(t, err)
+	assert.Contains(t, res.SkipReason, "timed out")
+}
+
+func TestSQLiteCompactCancelledContext(t *testing.T) {
+	fx := newSQLiteFixture(t, "1K", 1000, 600)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	_, err := fx.provider.Clean(ctx, CleanOptions{})
+	assert.NoError(t, err)
+	assert.Empty(t, *fx.calls)
+}
+
+func TestReadSQLiteHeaderRejectsBadHeaders(t *testing.T) {
+	dir := t.TempDir()
+	short := filepath.Join(dir, "short.db")
+	require.NoError(t, os.WriteFile(short, []byte(sqliteMagic), 0o600))
+	_, _, err := readSQLiteHeader(short)
+	require.Error(t, err)
+
+	empty := filepath.Join(dir, "empty.db")
+	writeFakeSQLite(t, empty, 0, 0)
+	_, _, err = readSQLiteHeader(empty)
+	require.Error(t, err)
+
+	_, _, err = readSQLiteHeader(filepath.Join(dir, "absent.db"))
+	require.Error(t, err)
+}
+
+func TestReadSQLiteHeaderPageSize65536(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "big.db")
+	writeFakeSQLite(t, path, 10, 4)
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	binary.BigEndian.PutUint16(data[16:18], 1)
+	require.NoError(t, os.WriteFile(path, data, 0o600))
+
+	fileBytes, freeBytes, err := readSQLiteHeader(path)
+	require.NoError(t, err)
+	assert.Equal(t, int64(10*65536), fileBytes)
+	assert.Equal(t, int64(4*65536), freeBytes)
+}

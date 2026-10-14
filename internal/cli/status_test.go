@@ -476,3 +476,18 @@ func TestScanProvider_SQLiteCompactReportsDatabases(t *testing.T) {
 	assert.Equal(t, int64(600*4096), status.Databases[0].Reclaim)
 	assert.Equal(t, int64(1000*4096), status.Databases[0].Bytes)
 }
+
+func TestOutputTable_ListsDatabases(t *testing.T) {
+	statuses := []ProviderStatus{{
+		Name: "sqlite-compact", CurrentFmt: "2.3 GiB", MaxFmt: "1.0 GiB", OverLimit: true,
+		Databases: []DatabaseStatus{
+			{Path: "/data/a.db", Bytes: 4 << 30, Reclaim: 3 << 30, Reclaimable: "3.0 GiB", InUse: true},
+			{Path: "/data/b.db", Bytes: 1 << 30, Reclaim: 0, Reclaimable: "0 B"},
+		},
+	}}
+
+	out := captureStdout(t, func() { require.NoError(t, outputTable(statuses)) })
+
+	assert.Contains(t, out, "sqlite-compact: 3.0 GiB reclaimable of 4.0 GiB (in use) /data/a.db")
+	assert.Contains(t, out, "sqlite-compact: 0 B reclaimable of 1.0 GiB (idle) /data/b.db")
+}
