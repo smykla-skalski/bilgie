@@ -78,7 +78,11 @@ func insideGitCheckout(path, home string) bool {
 		}
 	}
 	isHome := func(dir string) bool {
-		return slices.ContainsFunc(withoutDataAlias([]string{dir}), func(d string) bool {
+		spellings := []string{dir}
+		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+			spellings = append(spellings, resolved)
+		}
+		return slices.ContainsFunc(withoutDataAlias(spellings), func(d string) bool {
 			return slices.ContainsFunc(homes, func(h string) bool { return strings.EqualFold(h, d) })
 		})
 	}
