@@ -223,7 +223,7 @@ func TestCodexSessions_RejectsInvalidConfig(t *testing.T) {
 		cfg     config.Provider
 		wantErr string
 	}{
-		{"zero retention", config.Provider{Paths: []string{"/tmp"}, MaxSize: "1G", MaxAge: "0d"}, "max_age"},
+		{"zero retention", config.Provider{Paths: []string{t.TempDir()}, MaxSize: "1G", MaxAge: "0d"}, "max_age"},
 		{"relative path", config.Provider{Paths: []string{"sessions"}, MaxSize: "1G", MaxAge: "30d"}, "absolute"},
 	}
 	for _, tt := range tests {

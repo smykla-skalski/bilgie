@@ -87,7 +87,7 @@ func TestScanProvider_InvalidMaxSize(t *testing.T) {
 	cfg := &config.Config{
 		Providers: map[string]config.Provider{
 			"cargo": {
-				Paths:   []string{"/tmp"},
+				Paths:   []string{t.TempDir()},
 				MaxSize: "invalid",
 				Enabled: true,
 			},

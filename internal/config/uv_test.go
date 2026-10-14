@@ -122,9 +122,9 @@ func TestResolveUVCacheDir_RejectsPathsThatStayRelativeAfterExpansion(t *testing
 	t.Setenv("USERPROFILE", home)
 	t.Chdir(home)
 
-	spellings := []string{`\x`, `\\x`, `\cache\uv`}
+	spellings := []string{`\x`, `\cache\uv`}
 	if runtime.GOOS != "windows" {
-		spellings = append(spellings, `~\x`, `~\cache\uv`)
+		spellings = append(spellings, `\\x`, `~\x`, `~\cache\uv`)
 	}
 	for _, spelled := range spellings {
 		t.Run(spelled, func(t *testing.T) {
