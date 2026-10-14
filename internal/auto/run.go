@@ -439,13 +439,25 @@ func pathReason(ctx context.Context, path string, sweep bool, home string, prote
 	return "", nil
 }
 
+// eagerGuardLimit is the most paths guardPaths verifies up front. A provider
+// with more is a large sweep: it skips protected matches one at a time as it
+// reaches them, so the first removal does not wait on a marker scan of every
+// match.
+const eagerGuardLimit = 64
+
 // guardPaths hands a path-guarded provider a guard that skips only the
-// protected matches. The provider is skipped whole only when every one of its
-// paths is off limits; the reason is then the first path's. Each path is
-// checked once: the guard reuses the verdicts found here.
+// protected matches. A provider with few paths is skipped whole when every
+// one is off limits; the reason is then the first path's. Each path is
+// checked once: the guard reuses the verdicts found here. A provider with
+// many paths is guarded lazily and never skipped whole.
 func guardPaths(ctx context.Context, p provider.Provider, g provider.PathGuarded, home string, protected []string) (string, error) {
 	paths := p.Paths()
 	reasons := make(map[string]string, len(paths))
+	if len(paths) > eagerGuardLimit {
+		g.SetPathGuard(cachedGuard(ctx, reasons, home, protected))
+		return "", nil
+	}
+
 	first, blocked := "", 0
 	for _, path := range paths {
 		reason, err := pathReason(ctx, path, true, home, protected)
@@ -463,7 +475,14 @@ func guardPaths(ctx context.Context, p provider.Provider, g provider.PathGuarded
 	if len(paths) > 0 && blocked == len(paths) {
 		return first, nil
 	}
-	g.SetPathGuard(func(path string) string {
+	g.SetPathGuard(cachedGuard(ctx, reasons, home, protected))
+	return "", nil
+}
+
+// cachedGuard answers from reasons and records the verdict of every path it
+// had to check itself.
+func cachedGuard(ctx context.Context, reasons map[string]string, home string, protected []string) func(string) string {
+	return func(path string) string {
 		if reason, ok := reasons[path]; ok {
 			return reason
 		}
@@ -471,9 +490,9 @@ func guardPaths(ctx context.Context, p provider.Provider, g provider.PathGuarded
 		if err != nil {
 			return "cancelled"
 		}
+		reasons[path] = reason
 		return reason
-	})
-	return "", nil
+	}
 }
 
 func hasResolvedProtectedName(path string) bool {
