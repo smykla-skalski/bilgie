@@ -585,11 +585,26 @@ func (p *MiseProvider) trimFiles(ctx context.Context, dryRun bool, list []prunab
 	if dryRun {
 		var listed []string
 		for _, v := range list {
-			listed = append(listed, v.path)
-			listed = append(listed, v.extra...)
+			for _, d := range append([]string{v.path}, v.extra...) {
+				if d != "" {
+					listed = append(listed, pathSpellings(d)...)
+				}
+			}
 		}
+		resolvedDirs := map[string]string{}
 		opts.Exclude = func(path string) bool {
-			return slices.ContainsFunc(listed, func(d string) bool { return d != "" && pathWithin(path, d) })
+			dir := filepath.Dir(path)
+			resolved, ok := resolvedDirs[dir]
+			if !ok {
+				resolved = dir
+				if r, err := filepath.EvalSymlinks(dir); err == nil {
+					resolved = r
+				}
+				resolvedDirs[dir] = resolved
+			}
+			return slices.ContainsFunc(listed, func(d string) bool {
+				return pathWithin(path, d) || pathWithin(filepath.Join(resolved, filepath.Base(path)), d)
+			})
 		}
 	}
 	return cache.Trim(ctx, existing, opts)

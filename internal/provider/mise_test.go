@@ -487,6 +487,28 @@ func TestMise_DryRunDoesNotCountListedCacheTwice(t *testing.T) {
 	assert.Contains(t, paths, oldStray)
 }
 
+func TestMise_DryRunExcludesListedCacheBehindSymlink(t *testing.T) {
+	f := newMiseFixture(t)
+	vol := filepath.Join(t.TempDir(), "mise")
+	writeAged(t, filepath.Join(vol, "node", "20.0.0", "l.tar"), 300, 90*24*time.Hour)
+	writeAged(t, filepath.Join(vol, "stray", "a.bin"), 50, 90*24*time.Hour)
+	link := filepath.Join(t.TempDir(), "mise")
+	if err := os.Symlink(vol, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	listing := "mise node@20.0.0 is prunable: node is not required\n" +
+		"mise node@20.0.0 [dryrun]   remove " + f.node + ", " + filepath.Join(link, "node", "20.0.0") + "\n"
+	installFakeTool(t, "mise", fakeToolSpec{Replies: map[string]fakeReply{"prune --dry-run": {Stdout: listing}}})
+	p := newMise(t, f.root, config.Provider{})
+	p.paths = []string{f.root, vol}
+
+	res, err := p.Clean(context.Background(), CleanOptions{Mode: CleanModeSmart, DryRun: true})
+
+	require.NoError(t, err)
+	assert.NotContains(t, res.Output, "l.tar")
+	assert.Equal(t, int64(3000+300+50), res.BytesCleaned)
+}
+
 func TestMise_DryRunSizeTrimIgnoresListedCache(t *testing.T) {
 	f := newMiseFixture(t)
 	cacheDir := filepath.Join(t.TempDir(), "mise")
