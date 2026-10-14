@@ -217,6 +217,24 @@ func TestCodexSessions_UnreadableDirectoryIsAnError(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestCodexSessions_RejectsInvalidConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     config.Provider
+		wantErr string
+	}{
+		{"zero retention", config.Provider{Paths: []string{"/tmp"}, MaxSize: "1G", MaxAge: "0d"}, "max_age"},
+		{"relative path", config.Provider{Paths: []string{"sessions"}, MaxSize: "1G", MaxAge: "30d"}, "absolute"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NewCodexSessionsProvider("codex-sessions", tt.cfg)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
 func TestCodexSessions_FileVanishingBeforeRemovalIsIgnored(t *testing.T) {
 	root := t.TempDir()
 	old := writeRollout(t, root, "rollout-a.jsonl", 100, 100*day)
