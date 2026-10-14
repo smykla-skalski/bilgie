@@ -25,7 +25,7 @@ const miseInstallsDir = "installs"
 
 // MiseProvider cleans mise through its own `mise prune`, which decides what
 // is unused: only versions no tracked config references. bilgie lists what a
-// dry-run reports, refuses to act while mise or a mise-managed binary runs,
+// dry-run reports, refuses to act while mise installs, upgrades, prunes or switches tools,
 // then lets mise delete. Downloads and cache files go by age. The plugin git
 // clones below the data directory are never touched, so it enforces the
 // protected paths itself and `auto` skips the generic checkout scan.
@@ -229,25 +229,57 @@ func pathSpellings(path string) []string {
 	return out
 }
 
-// busyNow reports why mise cannot be pruned right now: a process whose executable is mise, or a
-// process whose command line names a binary below mise's installs directory.
-// A failed process listing counts as busy.
+// miseMutatingCommands are the mise subcommands (and their aliases) that
+// change installed tools while they run. Any other mise process, such as
+// "mise dev" or a mise-managed binary, leaves the installs alone.
+var miseMutatingCommands = map[string]bool{
+	"install": true, "i": true,
+	"upgrade": true, "up": true,
+	"prune": true,
+	"use":   true, "u": true,
+}
+
+// miseValueFlags are the global flags that take a separate value argument.
+var miseValueFlags = map[string]bool{
+	"-C": true, "--cd": true,
+	"-E": true, "--env": true,
+	"-j": true, "--jobs": true,
+	"--output": true,
+}
+
+// busyNow reports why mise cannot be pruned right now: a mise process
+// running install, upgrade, prune or use. A failed process listing counts as
+// busy.
 func (p *MiseProvider) busyNow(ctx context.Context) string {
 	lines, err := p.procLines(ctx)
 	if err != nil {
 		return "cannot list processes: " + err.Error()
 	}
 	for _, line := range lines {
-		if matchProcess(firstToken(strings.TrimSpace(line)), []string{"mise"}) != "" {
-			return "mise is running"
+		if cmd := miseMutatingCommand(line); cmd != "" {
+			return "mise " + cmd + " is running"
 		}
 	}
-	for _, root := range p.installRoots() {
-		prefix := foldPath(root) + "/"
-		for _, line := range lines {
-			if strings.Contains(foldPath(line), prefix) {
-				return "a mise-managed binary is running: " + firstToken(strings.TrimSpace(line))
-			}
+	return ""
+}
+
+// miseMutatingCommand returns the mutating subcommand of a mise command line,
+// or "" when the process is not mise or runs another subcommand.
+func miseMutatingCommand(line string) string {
+	fields := strings.Fields(line)
+	if len(fields) == 0 || matchProcess(fields[0], []string{"mise"}) == "" {
+		return ""
+	}
+	for i := 1; i < len(fields); i++ {
+		f := fields[i]
+		switch {
+		case miseValueFlags[f]:
+			i++
+		case strings.HasPrefix(f, "-"):
+		case miseMutatingCommands[f]:
+			return f
+		default:
+			return ""
 		}
 	}
 	return ""

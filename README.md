@@ -132,6 +132,11 @@ Providers are auto-detected — only tools installed on your system appear in th
 | gh | 1G | file-based |
 | chrome-devtools-mcp (disabled by default; never evicts `chrome-profile-*`) | 2G | whole-entry |
 | vscode-shipit | 1G | file-based |
+| app-updaters (`~/Library/Caches/*-updater`, macOS only) | 2G | file-based; skips paths with open files |
+| copilot (macOS only) | 1G | file-based; skips paths with open files |
+| golangci-lint (macOS only) | 1G | file-based; skips paths with open files |
+| node-gyp (macOS only) | 1G | file-based; skips paths with open files |
+| sail-e2e-dirs (disabled by default; `~/Library/Caches/dev.smykla.sail.e2e.*`, macOS only) | 5G | whole-directory; idle, open-file and `.git` checks |
 | **Project artifacts** | | |
 | project-artifacts (Rust `target`, `node_modules`, Python venvs of idle projects) | 20G | whole-directory, oldest project first |
 | **Toolchains** | | |
@@ -341,7 +346,7 @@ and starts no provider unless it decides to run a pass. A healthy tick prints no
 |------------|------------------|
 | healthy | nothing, except a routine pass every `auto.interval` (default 30m) that trims providers over their limit |
 | low | a full pass, at most every `auto.low_cooldown` (default 10m) |
-| critical | the same pass at the shorter `auto.critical_cooldown` (default 2m); cheapest-to-rebuild providers go first and the pass stops as soon as space recovers |
+| critical | the same pass at the shorter `auto.critical_cooldown` (default 2m); providers expected to free the most go first (rebuild cost breaks ties) and the pass stops as soon as space recovers |
 | emergency | as critical, with the stale-directory sweeps (`dir-pattern` providers such as `sail-dirs`, even when disabled) first |
 | falling | a low-tier pass when the projected free space crosses the low threshold within `auto.forecast` (default 15m) |
 
@@ -382,8 +387,10 @@ and always trims in smart mode (files older than `max_age`, then LRU to `max_siz
 |------|------------|-----------|
 | ok | at or above the low threshold | only enabled providers over their limit |
 | low | below the low threshold | every enabled provider, cheapest to rebuild first; stops once free space is back above the threshold plus the hysteresis |
-| critical | below `critical_free` | the low-tier trim, scheduled at the short cooldown |
-| emergency | below `emergency_free` | the stale-directory sweeps first (`dir-pattern` providers such as `sail-dirs`, even when disabled), then the low-tier trim |
+| critical | below `critical_free` | the low-tier trim, scheduled at the short cooldown, with the providers expected to free the most first |
+| emergency | below `emergency_free` | the stale-directory sweeps first (`dir-pattern` providers such as `sail-dirs`, even when disabled), then the critical-tier order |
+
+Each provider gets its own 10 minute budget inside the 45 minute pass deadline. A provider that exceeds it is reported as timed out with the bytes it freed so far, and the pass moves on to the next provider. The budget is fixed and not configurable.
 
 Safety rules:
 
