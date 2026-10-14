@@ -136,7 +136,7 @@ Providers are auto-detected — only tools installed on your system appear in th
 | copilot (macOS only) | 1G | file-based; skips paths with open files |
 | golangci-lint (macOS only) | 1G | file-based; skips paths with open files |
 | node-gyp (macOS only) | 1G | file-based; skips paths with open files |
-| sail-e2e-dirs (disabled by default; `~/Library/Caches/dev.smykla.sail.e2e.*`, macOS only) | 5G | whole-directory; idle, open-file and `.git` checks |
+| sail-e2e-dirs (disabled by default; `~/Library/Caches/dev.smykla.sail.e2e.*`, macOS only) | 5G | whole-directory; idle, open-file and `.git` checks (git data inside the directory is fine) |
 | **Project artifacts** | | |
 | project-artifacts (Rust `target`, `node_modules`, Python venvs of idle projects) | 20G | whole-directory, oldest project first |
 | **Toolchains** | | |
@@ -206,7 +206,9 @@ An artifact is skipped, with the reason in `--verbose` output, when:
   relative path in its arguments, or the value of `--manifest-path`, `--prefix`, `--cwd` or
   `-C`, `-w` or `--workspace`, resolves to a place inside it (`cd ~/code && node app/server.js`,
   `npm --prefix app start`, `node app`). Dev servers such as `vite`, `next-server`, `tsx`
-  and `nodemon` count as Node tools. A working directory above the project is not enough. A process
+  and `nodemon` count as Node tools. A tool whose working directory is above the project, inside the scan
+  root, holds it unless an argument points elsewhere (`cd ~/code && cargo build` holds every Cargo
+  project below; `--manifest-path other/Cargo.toml` holds only `other`). A process
   whose working directory cannot be read counts as busy, and the skip reason names the tool and
   pid (always on Windows, where only image names are visible)
 - a process has an open file in it (`lsof`, one listing for the whole pass, or `/proc` on Linux;
@@ -237,6 +239,13 @@ by default the five largest, with kind, project and idle days, and `--verbose` l
 and every skip. When every artifact is skipped, the provider shows as skipped with the first
 reason. `status` shows the size of all artifacts and how much of it is recoverable now
 (the clean checks except the slow open-file probe).
+
+Under disk pressure the idle threshold shortens: at the critical tier the effective `min_idle`
+is `critical_min_idle` (default `2d`) and at the emergency tier `emergency_min_idle` (default
+`1d`). A configured `min_idle` that is already shorter is kept, and the ok and low tiers use
+`min_idle` unchanged. Set `tier_scaling: false` to keep `min_idle` at every tier. The dirty-tree,
+running-process, open-file, recent-artifact-use and protected-path checks apply at every tier.
+Skip reasons and the `--dry-run` and `--verbose` entries show the threshold that applied.
 
 ```yaml
 providers:
@@ -397,7 +406,7 @@ Safety rules:
 - `docker-volumes` never runs in `auto`, enabled or not.
 - `xcode-archives` never runs in `auto`, by name or by path (any provider on an Xcode `Archives` folder is skipped): archives hold App Store dSYMs and signed builds.
 - Protection is by exact location, never by a directory's name. A provider is skipped when its path is, lies inside, or contains one of the protected roots: `~/Downloads`, the opencode data, config, cache and home directories, Docker volumes and the `protected` list. A directory that is merely named `opencode`, `worktrees` or `Downloads` inside a cache (mise keeps `downloads/opencode`) protects nothing.
-- A provider whose path lies inside a git checkout is skipped. Below the path, `auto` looks for a git checkout or worktree by its marker, an entry named `.git` of any kind (a directory, or the file of a linked worktree whose `gitdir:` points into another repository's `worktrees/` directory; the file is never opened, so any `.git` file protects), down to 3 levels below the path. The scan lists directory names only: it never opens files, never follows symlinks, stops at the first hit and gives up after 5 seconds, 50000 directories or 2000000 entries. A checkout buried deeper than 3 levels is not detected by this scan. The skip reason names the checkout that was found. For a `dir-pattern` sweep the check is per match: a protected match is skipped and counted, and the clean matches around it still go. The sweep is skipped whole only when every match is protected. For any other provider one protected entry skips the whole provider.
+- A provider whose path lies inside a git checkout is skipped. Below the path, `auto` looks for a git checkout or worktree by its marker, an entry named `.git` of any kind (a directory, or the file of a linked worktree whose `gitdir:` points into another repository's `worktrees/` directory; the file is never opened, so any `.git` file protects), down to 3 levels below the path. The scan lists directory names only: it never opens files, never follows symlinks, stops at the first hit and gives up after 5 seconds, 50000 directories or 2000000 entries. A checkout buried deeper than 3 levels is not detected by this scan. The skip reason names the checkout that was found. For a `dir-pattern` sweep the check is per match, and the git marker scan is left to the provider's own `.git` check (see `dir-pattern` above) while `skip_if_git_worktree` is on: a protected match is skipped and counted, and the clean matches around it still go. The sweep is skipped whole only when every match is protected. For any other provider one protected entry skips the whole provider.
 - Anything the scan cannot verify is skipped, never cleaned: `skipped (too large to verify: <path>)` when a limit is hit, `skipped (scan timed out, cannot verify: <path>)` when the 5 second scan runs out on a slow or network filesystem, `skipped (cannot verify: <dir>)` for an unreadable directory. Both appear in the `auto` output and the run log, and when every provider ends up skipped `auto` says `nothing to clean`.
 - Names still matter in two places: the path of a `dir-pattern` sweep of user directories (such as `sail-dirs`) is skipped when it has a `Downloads`, `opencode` or `worktrees` element, and the `status` listing of protected data finds `worktrees` directories and git checkouts near home.
 - Docker prune commands are cancelled after 10 minutes; command providers keep their `clean_timeout`.
@@ -551,13 +560,16 @@ providers:
 | `clean_timeout` | Max runtime of `clean_cmd` before it is cancelled and reported (default `2m`; units `ms`, `s`, `m`, `h`, `d`) |
 | `type` | `dir-pattern` removes whole stale directories matching a glob in `paths`; `project-artifacts` removes build artifacts of idle projects found below the roots in `paths` |
 | `min_idle` | `dir-pattern`: minimum idle time, from the newest mtime in the tree (default `2h`); `project-artifacts`: project idle time (default `7d`); units `m`, `h`, `d`, minimum `1m` |
+| `trim_idle` | `project-artifacts`: Rust build units (`.fingerprint`, `build`, `deps`, `incremental`) unused for this long are removed from the `target/` of an active project; a profile whose `.cargo-lock` is held is skipped, and dry-run lists the bytes it would trim (default `30d`; units `m`, `h`, `d`, minimum `1m`) |
 | `skip_if_open` | `dir-pattern`, `project-artifacts`: skip directories with open files via `lsof +D` (default `true`) |
-| `skip_if_git_worktree` | `dir-pattern`: skip directories containing a `.git` entry (default `true`) |
+| `skip_if_git_worktree` | `dir-pattern`: skip directories whose `.git` entries reach outside them (default `true`) |
 | `max_depth` | `project-artifacts`: directory levels searched below each root (default `4`, from 1 to 16; a negative value is an error) |
 | `pass_budget` | `project-artifacts`: time one clean pass may spend before the remaining candidates are skipped (default `30s`; units `ms`, `s`, `m`, `h`, `d`) |
 | `scan_budget` | `project-artifacts`: time allowed for finding projects per pass (default `10s`; units `ms`, `s`, `m`, `h`, `d`) |
 | `rust`, `node`, `python` | `project-artifacts`: per-kind switches (default `true`, `true`, `false`) |
 | `skip_if_dirty` | `project-artifacts`: skip projects with uncommitted changes (default `true`) |
+| `tier_scaling` | `project-artifacts`: shorten `min_idle` at the critical and emergency tiers (default `true`) |
+| `critical_min_idle`, `emergency_min_idle` | `project-artifacts`: idle threshold at those tiers when `tier_scaling` is on (defaults `2d`, `1d`); never raises a shorter `min_idle`; same units and minimum as `min_idle` |
 | `skip_prefixes` | Whole-entry providers never evict entries whose name starts with one of these prefixes; user values add to the built-in ones |
 
 The optional top-level `auto` block configures `bilgie tick`, `bilgie auto` and the agent. Every key is optional; the values shown are the defaults:
@@ -743,6 +755,24 @@ uses `dir-pattern` and is disabled by default. The paths follow the machine and 
 the config file. Enable it with `enabled: true` after reviewing
 `bilgie clean sail-dirs --dry-run`, which lists each directory with its size,
 idle time and the reason it would be skipped.
+
+A `dir-pattern` match that holds `.git` entries is still removed when all its git data stays
+inside it, as in an agent scratch root full of test repositories. It is skipped when any `.git`
+entry:
+
+- is a file whose `gitdir:` target, or the `commondir` of that target, resolves outside the match,
+  with the outside path in the reason (`git data outside the root: ... points to <path>`);
+- belongs to a repository whose linked worktree (`.git/worktrees/*/gitdir`) lives outside the match
+  (`linked worktree outside the root: <path>`);
+- cannot be read or resolved: a malformed or empty `.git` file, an unreadable worktree pointer or a
+  `.git` symlink.
+
+Symlinks are resolved on both sides, so a root reached through a symlinked temp directory compares
+correctly. The idle and open-file checks still apply. The run output says which matches went
+despite holding `.git`: `allowed despite 3 .git entries with all git data inside`, in
+`--dry-run` as `would remove`. `auto` leaves the `.git` check of these matches to the provider
+instead of the marker scan described under `auto`, unless `skip_if_git_worktree` is `false`.
+Setting it to `false` turns the check off for `clean`.
 
 ## Building from Source
 

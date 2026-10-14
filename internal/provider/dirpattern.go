@@ -16,26 +16,36 @@ import (
 	"github.com/smykla-skalski/bilgie/pkg/size"
 )
 
+// openEvalTTL is how old a listing of open files may be when a directory is
+// first evaluated; the check right before removal accepts openSnapshotTTL.
+const openEvalTTL = time.Minute
+
+var errRecentEntry = errors.New("entry modified within min_idle")
+
 // defaultMinIdle is how long a directory must be untouched before removal.
 const defaultMinIdle = 2 * time.Hour
 
 // DirPatternProvider removes whole stale directories matching a glob.
-// A directory is only removed when it is idle, has no open files and is not
-// a git worktree; every skip is reported with its reason.
+// A directory is only removed when it is idle, has no open files and keeps
+// no git data outside itself; every skip is reported with its reason.
 type DirPatternProvider struct {
 	*BaseProvider
 	minIdle           time.Duration
 	skipIfOpen        bool
 	skipIfGitWorktree bool
 
-	now       func() time.Time
-	openCheck func(ctx context.Context, dir string) (bool, error)
+	now func() time.Time
+	// openMany answers for many directories from one listing of open files.
+	openMany  func(ctx context.Context, dirs []string) (map[string]bool, error)
 	protected []string
 	// keep holds directories a match must neither equal nor contain, so a
 	// sweep never removes the temp dir the process itself runs in.
 	keep  []string
 	guard func(path string) string
 }
+
+// ChecksGit implements GitChecker.
+func (p *DirPatternProvider) ChecksGit() bool { return p.skipIfGitWorktree }
 
 // SetPathGuard implements PathGuarded.
 func (p *DirPatternProvider) SetPathGuard(guard func(path string) string) { p.guard = guard }
@@ -65,7 +75,7 @@ func NewDirPatternProvider(name string, cfg config.Provider) (*DirPatternProvide
 		skipIfOpen:        cfg.SkipIfOpen == nil || *cfg.SkipIfOpen,
 		skipIfGitWorktree: cfg.SkipIfGitWorktree == nil || *cfg.SkipIfGitWorktree,
 		now:               time.Now,
-		openCheck:         osshim.HasOpenFiles,
+		openMany:          osshim.OpenFilesUnder,
 	}
 
 	p.keep = []string{os.TempDir()}
@@ -85,8 +95,9 @@ func NewDirPatternProvider(name string, cfg config.Provider) (*DirPatternProvide
 
 // dirScan is the result of walking one candidate directory.
 type dirScan struct {
-	newest  time.Time
-	gitPath string
+	newest time.Time
+	// gitMarkers holds the .git entries below the directory.
+	gitMarkers []string
 	// links holds the hard-linked files of the walk, kept out of size: an
 	// inode frees space only when every link to it is removed.
 	links map[osshim.FileID]linkInfo
@@ -101,49 +112,47 @@ type linkInfo struct {
 	nlink, seen uint64
 }
 
-// evaluated is one matched directory after the eligibility checks.
-type evaluated struct {
-	dir    string
-	reason string
-	sc     dirScan
-}
-
 // Clean implements Provider. Smart and full modes behave the same: only
 // whole stale directories are removed, never individual files.
 //
-// Every directory is evaluated before any is removed: removing one drops the
-// link count of files it shares with another, which would hide the shared
-// inode from the later scan.
+// Directories are handled one at a time, oldest first, so space is freed as
+// soon as the first one passes its checks instead of after every match was
+// evaluated. Under disk pressure the sweep stops once opts.Recovered reports
+// recovery, and a cancelled sweep returns what it freed so far.
 func (p *DirPatternProvider) Clean(ctx context.Context, opts CleanOptions) (CleanResult, error) {
 	var (
 		out    strings.Builder
 		result CleanResult
 		errs   []error
 	)
+	finish := func(err error) (CleanResult, error) {
+		result.Output = out.String()
+		return result, errors.Join(append(errs, err)...)
+	}
 
-	evals, err := p.evaluateAll(ctx)
+	dirs, err := p.candidates(ctx)
 	if err != nil {
-		return result, err
+		return finish(err)
 	}
-	freed := newFreedLinks(evals)
-	eligible := 0
-	for _, ev := range evals {
-		if ev.reason == "" {
-			eligible++
-		}
-	}
+	sw := &sweep{p: p, dryRun: opts.DryRun, dirs: dirs, links: newFreedLinks(), files: make(map[string]int64)}
 
-	for _, ev := range evals {
+	for i, dir := range dirs {
 		if err := ctx.Err(); err != nil {
-			result.Output = out.String()
-			return result, err
+			return finish(err)
+		}
+		sw.next = i
+		if sw.insideRemoved(dir) {
+			continue
 		}
 
-		dir, sc, reason := ev.dir, ev.sc, ev.reason
-		if reason == "" && !opts.DryRun && eligible > 1 {
-			// Other directories were evaluated since this one; confirm it
-			// is still idle, clean of .git and free of open files.
-			sc, reason = p.recheckBeforeRemoval(ctx, dir, sc)
+		sc, reason := p.evaluate(ctx, dir, sw)
+		if !opts.DryRun && reason == "" {
+			// Confirm the directory is still idle, clean of .git and free
+			// of open files right before it goes.
+			sc, reason = p.recheckBeforeRemoval(ctx, dir, sc, sw)
+		}
+		if err := ctx.Err(); err != nil {
+			return finish(err)
 		}
 		if reason == "" && !opts.DryRun {
 			if _, statErr := os.Lstat(dir); errors.Is(statErr, fs.ErrNotExist) {
@@ -157,40 +166,46 @@ func (p *DirPatternProvider) Clean(ctx context.Context, opts CleanOptions) (Clea
 		}
 
 		idle := p.now().Sub(sc.newest).Round(time.Second)
+		verb := "would remove"
+		if !opts.DryRun {
+			if err := os.RemoveAll(dir); err != nil {
+				errs = append(errs, fmt.Errorf("remove %s: %w", dir, err))
+				fmt.Fprintf(&out, "error: %s (%v)\n", dir, err)
+				continue
+			}
+			verb = "removed"
+		}
+
+		sc.size += sw.links.remove(sc)
 		if opts.DryRun {
-			sc.size = ev.sc.size + freed.remove(ev.sc)
-			fmt.Fprintf(&out, "would remove: %s (%s, idle %s)\n", dir, size.FormatSize(sc.size), idle)
-			result.BytesCleaned += sc.size
-			result.FilesDeleted += sc.files
-			result.Entries = append(result.Entries, Entry{Path: dir, Size: sc.size})
-			continue
+			sw.dropNested(&result, dir)
 		}
-
-		if err := os.RemoveAll(dir); err != nil {
-			errs = append(errs, fmt.Errorf("remove %s: %w", dir, err))
-			fmt.Fprintf(&out, "error: %s (%v)\n", dir, err)
-			continue
-		}
-
-		sc.size = ev.sc.size + freed.remove(ev.sc)
-		fmt.Fprintf(&out, "removed: %s (%s, idle %s)\n", dir, size.FormatSize(sc.size), idle)
+		sw.removed = append(sw.removed, dir, resolveParent(dir))
+		sw.files[dir] = sc.files
+		fmt.Fprintf(&out, "%s: %s (%s, idle %s%s)\n", verb, dir, size.FormatSize(sc.size), idle, gitNote(sc))
 		result.BytesCleaned += sc.size
 		result.FilesDeleted += sc.files
 		result.Entries = append(result.Entries, Entry{Path: dir, Size: sc.size})
+
+		if opts.Recovered != nil && opts.Recovered(result.BytesCleaned) {
+			break
+		}
 	}
 
-	result.Output = out.String()
-	return result, errors.Join(errs...)
+	return finish(nil)
 }
 
-// evaluateAll evaluates every distinct matched directory. Two spellings of one
-// directory (case variants, symlinked parents) count once, and a directory
-// below an eligible match is dropped: the match's own scan covers it.
-func (p *DirPatternProvider) evaluateAll(ctx context.Context) ([]evaluated, error) {
+// candidates lists every distinct matched directory, oldest first. Two
+// spellings of one directory (case variants, symlinked parents) count once.
+func (p *DirPatternProvider) candidates(ctx context.Context) ([]string, error) {
+	type match struct {
+		dir string
+		mod time.Time
+	}
 	var (
-		evals = make([]evaluated, 0, len(p.paths))
-		seen  = make(map[string]bool, len(p.paths))
-		infos []fs.FileInfo
+		matches = make([]match, 0, len(p.paths))
+		seen    = make(map[string]bool, len(p.paths))
+		infos   []fs.FileInfo
 	)
 	for _, dir := range p.paths {
 		if err := ctx.Err(); err != nil {
@@ -200,26 +215,88 @@ func (p *DirPatternProvider) evaluateAll(ctx context.Context) ([]evaluated, erro
 			continue
 		}
 		seen[dir] = true
+		var mod time.Time
 		if info, err := os.Lstat(dir); err == nil {
 			if slices.ContainsFunc(infos, func(o fs.FileInfo) bool { return os.SameFile(o, info) }) {
 				continue
 			}
 			infos = append(infos, info)
+			mod = info.ModTime()
 		}
-		sc, reason := p.evaluate(ctx, dir)
-		evals = append(evals, evaluated{dir: dir, sc: sc, reason: reason})
+		matches = append(matches, match{dir: dir, mod: mod})
 	}
+	slices.SortStableFunc(matches, func(a, b match) int { return a.mod.Compare(b.mod) })
 
-	var roots []string
-	for _, ev := range evals {
-		if ev.reason == "" {
-			roots = append(roots, resolveParent(ev.dir))
-		}
+	dirs := make([]string, len(matches))
+	for i, m := range matches {
+		dirs[i] = m.dir
 	}
-	return slices.DeleteFunc(evals, func(ev evaluated) bool {
-		self := resolveParent(ev.dir)
-		return slices.ContainsFunc(roots, func(root string) bool { return isProperAncestor(root, self) })
-	}), nil
+	return dirs, nil
+}
+
+// sweep is the state of one Clean pass.
+type sweep struct {
+	p       *DirPatternProvider
+	dirs    []string
+	links   *freedLinks
+	files   map[string]int64
+	snap    openSnapshot
+	removed []string
+	next    int
+	dryRun  bool
+}
+
+// openSnapshot is one listing of open files and when it was taken.
+type openSnapshot struct {
+	at   time.Time
+	open map[string]bool
+	err  error
+}
+
+// openReason returns why dir has open files, or "". It reuses the pass's
+// listing while it is younger than maxAge; a dry run keeps one throughout. The
+// listing covers the directories not yet handled, so one machine-wide scan
+// serves many of them. A failed listing counts every directory as open.
+func (sw *sweep) openReason(ctx context.Context, dir string, maxAge time.Duration) string {
+	if !sw.p.skipIfOpen {
+		return ""
+	}
+	if sw.snap.at.IsZero() || (!sw.dryRun && sw.p.now().Sub(sw.snap.at) > maxAge) {
+		probeCtx, cancel := context.WithTimeout(ctx, openCheckTimeout)
+		defer cancel()
+		sw.snap.open, sw.snap.err = sw.p.openMany(probeCtx, sw.dirs[sw.next:])
+		sw.snap.at = sw.p.now()
+	}
+	switch {
+	case sw.snap.err != nil:
+		return "open-file check failed: " + sw.snap.err.Error()
+	case sw.snap.open[dir]:
+		return "has open files"
+	}
+	return ""
+}
+
+// insideRemoved reports whether dir lies below a directory already removed
+// (or, in a dry run, already counted): that match's own scan covered it.
+func (sw *sweep) insideRemoved(dir string) bool {
+	self := resolveParent(dir)
+	return slices.ContainsFunc(sw.removed, func(root string) bool {
+		return isProperAncestor(root, self) || isProperAncestor(root, dir)
+	})
+}
+
+// dropNested takes back the dry-run entries below dir, which dir's own scan
+// counts again.
+func (sw *sweep) dropNested(res *CleanResult, dir string) {
+	root := resolveParent(dir)
+	res.Entries = slices.DeleteFunc(res.Entries, func(e Entry) bool {
+		if !isProperAncestor(root, resolveParent(e.Path)) {
+			return false
+		}
+		res.BytesCleaned -= e.Size
+		res.FilesDeleted -= sw.files[e.Path]
+		return true
+	})
 }
 
 func isProperAncestor(ancestor, path string) bool {
@@ -229,41 +306,24 @@ func isProperAncestor(ancestor, path string) bool {
 
 // recheckBeforeRemoval repeats every check that can change while other
 // directories are being processed, open files included.
-func (p *DirPatternProvider) recheckBeforeRemoval(ctx context.Context, dir string, before dirScan) (sc dirScan, skipReason string) {
+func (p *DirPatternProvider) recheckBeforeRemoval(ctx context.Context, dir string, before dirScan, sw *sweep) (sc dirScan, skipReason string) {
 	sc, skipReason = p.recheck(ctx, dir, before)
-	if skipReason != "" || !p.skipIfOpen {
+	if skipReason != "" {
 		return sc, skipReason
 	}
-	open, err := p.openCheck(ctx, dir)
-	switch {
-	case err != nil:
-		return sc, "open-file check failed: " + err.Error()
-	case open:
-		return sc, "has open files"
-	}
-	return sc, ""
+	return sc, sw.openReason(ctx, dir, openSnapshotTTL)
 }
 
-// freedLinks tracks hard-linked inodes across the directories about to be
-// removed. An inode counts as freed once, in the last directory holding it to
-// be removed, and only when every holder was removed and every link to it
-// lies inside those directories.
+// freedLinks tracks hard-linked inodes across the removed directories. An
+// inode counts as freed once, in the removal that takes its last link: the
+// links removed so far equal the link count first seen.
 type freedLinks struct {
-	total   map[osshim.FileID]uint64
+	nlink   map[osshim.FileID]uint64
 	removed map[osshim.FileID]uint64
 }
 
-func newFreedLinks(evals []evaluated) *freedLinks {
-	f := &freedLinks{total: make(map[osshim.FileID]uint64), removed: make(map[osshim.FileID]uint64)}
-	for _, ev := range evals {
-		if ev.reason != "" {
-			continue
-		}
-		for id, li := range ev.sc.links {
-			f.total[id] += li.seen
-		}
-	}
-	return f
+func newFreedLinks() *freedLinks {
+	return &freedLinks{nlink: make(map[osshim.FileID]uint64), removed: make(map[osshim.FileID]uint64)}
 }
 
 // remove records that sc's directory is gone and returns the bytes of the
@@ -271,8 +331,12 @@ func newFreedLinks(evals []evaluated) *freedLinks {
 func (f *freedLinks) remove(sc dirScan) int64 {
 	var n int64
 	for id, li := range sc.links {
+		if _, known := f.nlink[id]; !known {
+			f.nlink[id] = li.nlink
+		}
+		before := f.removed[id]
 		f.removed[id] += li.seen
-		if f.removed[id] == f.total[id] && f.total[id] >= li.nlink {
+		if before < f.nlink[id] && f.removed[id] >= f.nlink[id] {
 			n += li.size
 		}
 	}
@@ -281,16 +345,10 @@ func (f *freedLinks) remove(sc dirScan) int64 {
 
 // evaluate decides whether dir may be removed. A non-empty reason means skip.
 // Cheap checks run first; the expensive open-files check runs last.
-func (p *DirPatternProvider) evaluate(ctx context.Context, dir string) (sc dirScan, skipReason string) {
+func (p *DirPatternProvider) evaluate(ctx context.Context, dir string, sw *sweep) (sc dirScan, skipReason string) {
 	if p.isProtected(dir) || p.isProtected(resolveParent(dir)) {
 		return sc, "protected path"
 	}
-	if p.guard != nil {
-		if reason := p.guard(dir); reason != "" {
-			return sc, reason
-		}
-	}
-
 	if p.containsKept(dir) || p.containsKept(resolveParent(dir)) {
 		return sc, "contains the temp dir in use"
 	}
@@ -310,46 +368,48 @@ func (p *DirPatternProvider) evaluate(ctx context.Context, dir string) (sc dirSc
 		return sc, "is a .git directory"
 	}
 
-	sc, skipReason = scanDir(ctx, dir, info.ModTime())
+	sc, skipReason = scanDir(ctx, dir, info.ModTime(), p.idleCutoff())
 	if skipReason != "" {
 		return sc, skipReason
 	}
 
-	if p.skipIfGitWorktree && sc.gitPath != "" {
-		return sc, "contains .git at " + sc.gitPath
+	if reason := p.gitReason(dir, sc); reason != "" {
+		return sc, reason
 	}
 
 	if idle := p.now().Sub(sc.newest); idle < p.minIdle {
 		return sc, fmt.Sprintf("modified %s ago, min_idle %s", idle.Round(time.Second), p.minIdle)
 	}
 
-	if p.skipIfOpen {
-		open, openErr := p.openCheck(ctx, dir)
-		if openErr != nil {
-			return sc, "open-file check failed: " + openErr.Error()
+	// The marker scan is the slowest check, so only idle directories get it.
+	if p.guard != nil {
+		if reason := p.guard(dir); reason != "" {
+			return sc, reason
 		}
-		if open {
-			return sc, "has open files"
-		}
+	}
+
+	if reason := sw.openReason(ctx, dir, openEvalTTL); reason != "" {
+		return sc, reason
 	}
 
 	return p.recheck(ctx, dir, sc)
 }
 
-// recheck rescans after the slow open-files check so activity that started
-// meanwhile (new writes, a fresh .git) still blocks removal.
+// idleCutoff is the time after which a modification makes a directory too
+// recent to remove.
+func (p *DirPatternProvider) idleCutoff() time.Time { return p.now().Add(-p.minIdle) }
+
+// recheck rescans after the slow checks so activity that started meanwhile
+// (new writes, a fresh .git) still blocks removal.
 func (p *DirPatternProvider) recheck(ctx context.Context, dir string, before dirScan) (sc dirScan, skipReason string) {
-	sc, skipReason = scanDir(ctx, dir, before.newest)
+	sc, skipReason = scanDir(ctx, dir, before.newest, p.idleCutoff())
 	if skipReason != "" {
 		return sc, skipReason
 	}
 	if sc.newest.After(before.newest) {
 		return sc, "modified during checks"
 	}
-	if p.skipIfGitWorktree && sc.gitPath != "" {
-		return sc, "contains .git at " + sc.gitPath
-	}
-	return sc, ""
+	return sc, p.gitReason(dir, sc)
 }
 
 // resolveParent returns dir with symlinks in its parent chain resolved, so a
@@ -395,7 +455,10 @@ func (p *DirPatternProvider) containsKept(dir string) bool {
 // scanDir walks dir without following symlinks, collecting the newest mtime,
 // the first .git entry and size totals. Any unreadable entry yields a skip
 // reason: an incomplete scan cannot prove the directory is idle.
-func scanDir(ctx context.Context, dir string, rootMod time.Time) (sc dirScan, skipReason string) {
+//
+// A non-zero cutoff stops the walk at the first entry modified after it: the
+// directory is too recent to remove, so the rest of its size is moot.
+func scanDir(ctx context.Context, dir string, rootMod, cutoff time.Time) (sc dirScan, skipReason string) {
 	sc = dirScan{newest: rootMod}
 
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
@@ -434,13 +497,12 @@ func scanDir(ctx context.Context, dir string, rootMod time.Time) (sc dirScan, sk
 		if info.ModTime().After(sc.newest) {
 			sc.newest = info.ModTime()
 		}
+		if !cutoff.IsZero() && info.ModTime().After(cutoff) {
+			return errRecentEntry
+		}
 
-		if IsGitMarkerName(d.Name()) && sc.gitPath == "" && path != dir {
-			rel, relErr := filepath.Rel(dir, path)
-			if relErr != nil {
-				rel = path
-			}
-			sc.gitPath = rel
+		if IsGitMarkerName(d.Name()) && path != dir {
+			sc.gitMarkers = append(sc.gitMarkers, path)
 		}
 
 		if info.Mode().IsRegular() {
@@ -459,7 +521,7 @@ func scanDir(ctx context.Context, dir string, rootMod time.Time) (sc dirScan, sk
 		}
 		return nil
 	})
-	if err != nil {
+	if err != nil && !errors.Is(err, errRecentEntry) {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return sc, "scan interrupted: " + ctxErr.Error()
 		}

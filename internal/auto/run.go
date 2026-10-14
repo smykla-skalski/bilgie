@@ -402,6 +402,7 @@ func runCandidate(ctx context.Context, cfg *config.Config, c *candidate, tier Ti
 		Mode:    provider.CleanModeSmart,
 		Timeout: DockerCleanTimeout,
 	}
+	opts.Pressure = pressureFor(tier)
 	if tier != TierOK {
 		opts.Recovered = recoveredFunc(cfg, deps, dryRun)
 	}
@@ -422,6 +423,19 @@ func runCandidate(ctx context.Context, cfg *config.Config, c *candidate, tier Ti
 		res.Status = StatusCleaned
 	}
 	return res
+}
+
+// pressureFor maps a tier to the pressure level providers scale their idle
+// thresholds by; only critical and emergency shorten them.
+func pressureFor(tier Tier) provider.Pressure {
+	switch {
+	case tier >= TierEmergency:
+		return provider.PressureEmergency
+	case tier == TierCritical:
+		return provider.PressureCritical
+	default:
+		return provider.PressureNone
+	}
 }
 
 // recoveredFunc tells a provider freeing space in steps when it can stop: free
@@ -453,7 +467,7 @@ func skipped(res Result, reason string) Result {
 // the scan was cancelled.
 func protectedReason(ctx context.Context, p provider.Provider, sweep bool, home string, protected []string) (string, error) {
 	for _, path := range p.Paths() {
-		reason, err := pathReason(ctx, path, sweep, home, protected)
+		reason, err := pathReason(ctx, path, sweep, true, home, protected)
 		if err != nil || reason != "" {
 			return reason, err
 		}
@@ -462,11 +476,11 @@ func protectedReason(ctx context.Context, p provider.Provider, sweep bool, home 
 }
 
 // pathReason is protectedReason for one path.
-func pathReason(ctx context.Context, path string, sweep bool, home string, protected []string) (string, error) {
+func pathReason(ctx context.Context, path string, sweep, scanTree bool, home string, protected []string) (string, error) {
 	if sweep && (hasProtectedName(path) || hasResolvedProtectedName(path)) {
 		return "protected path " + path, nil
 	}
-	v := checkProtected(ctx, path, home, protected, true)
+	v := checkProtected(ctx, path, home, protected, scanTree)
 	switch {
 	case v.cancelled:
 		return "", ctx.Err()
@@ -480,16 +494,29 @@ func pathReason(ctx context.Context, path string, sweep bool, home string, prote
 	return "", nil
 }
 
+// eagerGuardLimit is the most paths guardPaths verifies up front. A provider
+// with more is a large sweep: it skips protected matches one at a time as it
+// reaches them, so the first removal does not wait on a marker scan of every
+// match.
+const eagerGuardLimit = 64
+
 // guardPaths hands a path-guarded provider a guard that skips only the
-// protected matches. The provider is skipped whole only when every one of its
-// paths is off limits; the reason is then the first path's. Each path is
-// checked once: the guard reuses the verdicts found here.
+// protected matches. A provider with few paths is skipped whole when every
+// one is off limits; the reason is then the first path's. Each path is
+// checked once: the guard reuses the verdicts found here. A provider with
+// many paths is guarded lazily and never skipped whole.
 func guardPaths(ctx context.Context, p provider.Provider, g provider.PathGuarded, home string, protected []string) (string, error) {
 	paths := p.Paths()
 	reasons := make(map[string]string, len(paths))
+	scanTree := !ownsGitCheck(p)
+	if len(paths) > eagerGuardLimit {
+		g.SetPathGuard(cachedGuard(ctx, reasons, scanTree, home, protected))
+		return "", nil
+	}
+
 	first, blocked := "", 0
 	for _, path := range paths {
-		reason, err := pathReason(ctx, path, true, home, protected)
+		reason, err := pathReason(ctx, path, true, scanTree, home, protected)
 		if err != nil {
 			return "", err
 		}
@@ -504,17 +531,32 @@ func guardPaths(ctx context.Context, p provider.Provider, g provider.PathGuarded
 	if len(paths) > 0 && blocked == len(paths) {
 		return first, nil
 	}
-	g.SetPathGuard(func(path string) string {
+	g.SetPathGuard(cachedGuard(ctx, reasons, scanTree, home, protected))
+	return "", nil
+}
+
+// ownsGitCheck reports whether p inspects the .git entries below its matches
+// itself. The marker scan then stays out of the way: p tells a .git whose data
+// lies inside the match from one that reaches outside it.
+func ownsGitCheck(p provider.Provider) bool {
+	g, ok := p.(provider.GitChecker)
+	return ok && g.ChecksGit()
+}
+
+// cachedGuard answers from reasons and records the verdict of every path it
+// had to check itself.
+func cachedGuard(ctx context.Context, reasons map[string]string, scanTree bool, home string, protected []string) func(string) string {
+	return func(path string) string {
 		if reason, ok := reasons[path]; ok {
 			return reason
 		}
-		reason, err := pathReason(ctx, path, true, home, protected)
+		reason, err := pathReason(ctx, path, true, scanTree, home, protected)
 		if err != nil {
 			return "cancelled"
 		}
+		reasons[path] = reason
 		return reason
-	})
-	return "", nil
+	}
 }
 
 func hasResolvedProtectedName(path string) bool {

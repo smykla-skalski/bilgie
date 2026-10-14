@@ -68,10 +68,32 @@ type PathGuarded interface {
 	SetPathGuard(guard func(path string) string)
 }
 
+// GitChecker is implemented by path-guarded providers that inspect the .git
+// entries below each match themselves, so the caller need not refuse a match
+// merely because a .git entry lies below it. ChecksGit reports whether that
+// inspection is on.
+type GitChecker interface {
+	ChecksGit() bool
+}
+
+// Pressure is the disk-pressure level a clean runs under. Providers that
+// scale an idle threshold read it; the rest ignore it.
+type Pressure int
+
+// Pressure levels, lowest to highest.
+const (
+	PressureNone Pressure = iota
+	PressureCritical
+	PressureEmergency
+)
+
 // CleanOptions configures cleaning behavior.
 type CleanOptions struct {
 	DryRun bool
 	Mode   CleanMode
+	// Pressure shortens project-artifacts' idle threshold at the critical and
+	// emergency tiers. The zero value applies the configured threshold.
+	Pressure Pressure
 	// Timeout bounds Docker's prune command when positive. Other providers
 	// keep their own clean_timeout. Zero leaves Docker unbounded.
 	Timeout time.Duration
