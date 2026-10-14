@@ -94,6 +94,10 @@ func newProvider(name string, cfg config.Provider) (Provider, error) {
 		return NewSQLiteCompactProvider(name, cfg)
 	}
 
+	if name == "codex-sessions" {
+		return NewCodexSessionsProvider(name, cfg)
+	}
+
 	if name == "rustup" {
 		return NewRustupProvider(name, cfg)
 	}

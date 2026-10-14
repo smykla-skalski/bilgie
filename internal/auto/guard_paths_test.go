@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/smykla-skalski/bilgie/internal/config"
 	"github.com/smykla-skalski/bilgie/internal/provider"
 )
 
@@ -60,4 +61,40 @@ func TestGuardPathsSkipsSmallSweepWhenEveryPathIsBlocked(t *testing.T) {
 	reason, err := guardPaths(t.Context(), stub, stub, home, nil)
 	require.NoError(t, err)
 	assert.Contains(t, reason, "protected path")
+}
+
+func TestGuardPathsLeavesGitInsideMatchesToTheDirPatternProvider(t *testing.T) {
+	tests := []struct {
+		name       string
+		skipGit    bool
+		wantReason string
+	}{
+		{name: "git check on", skipGit: true},
+		{name: "git check off", skipGit: false, wantReason: "git checkout at"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			home := filepath.Join(root, "home")
+			require.NoError(t, os.MkdirAll(home, 0o750))
+			dir := filepath.Join(root, "scratch-a")
+			require.NoError(t, os.MkdirAll(filepath.Join(dir, "sub", ".git"), 0o750))
+
+			p, err := provider.NewDirPatternProvider("sweep", config.Provider{
+				Type:              config.TypeDirPattern,
+				Paths:             []string{filepath.Join(root, "scratch-*")},
+				MaxSize:           "1G",
+				SkipIfGitWorktree: &tt.skipGit,
+			})
+			require.NoError(t, err)
+
+			reason, err := guardPaths(t.Context(), p, p, home, nil)
+			require.NoError(t, err)
+			if tt.wantReason == "" {
+				assert.Empty(t, reason)
+				return
+			}
+			assert.Contains(t, reason, tt.wantReason)
+		})
+	}
 }

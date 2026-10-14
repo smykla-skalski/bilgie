@@ -74,6 +74,14 @@ type PathGuarded interface {
 	SetPathGuard(guard func(path string) string)
 }
 
+// GitChecker is implemented by path-guarded providers that inspect the .git
+// entries below each match themselves, so the caller need not refuse a match
+// merely because a .git entry lies below it. ChecksGit reports whether that
+// inspection is on.
+type GitChecker interface {
+	ChecksGit() bool
+}
+
 // Pressure is the disk-pressure level a clean runs under. Providers that
 // scale an idle threshold read it; the rest ignore it.
 type Pressure int

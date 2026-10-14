@@ -26,8 +26,8 @@ var errRecentEntry = errors.New("entry modified within min_idle")
 const defaultMinIdle = 2 * time.Hour
 
 // DirPatternProvider removes whole stale directories matching a glob.
-// A directory is only removed when it is idle, has no open files and is not
-// a git worktree; every skip is reported with its reason.
+// A directory is only removed when it is idle, has no open files and keeps
+// no git data outside itself; every skip is reported with its reason.
 type DirPatternProvider struct {
 	*BaseProvider
 	minIdle           time.Duration
@@ -43,6 +43,9 @@ type DirPatternProvider struct {
 	keep  []string
 	guard func(path string) string
 }
+
+// ChecksGit implements GitChecker.
+func (p *DirPatternProvider) ChecksGit() bool { return p.skipIfGitWorktree }
 
 // SetPathGuard implements PathGuarded.
 func (p *DirPatternProvider) SetPathGuard(guard func(path string) string) { p.guard = guard }
@@ -92,8 +95,9 @@ func NewDirPatternProvider(name string, cfg config.Provider) (*DirPatternProvide
 
 // dirScan is the result of walking one candidate directory.
 type dirScan struct {
-	newest  time.Time
-	gitPath string
+	newest time.Time
+	// gitMarkers holds the .git entries below the directory.
+	gitMarkers []string
 	// links holds the hard-linked files of the walk, kept out of size: an
 	// inode frees space only when every link to it is removed.
 	links map[osshim.FileID]linkInfo
@@ -178,7 +182,7 @@ func (p *DirPatternProvider) Clean(ctx context.Context, opts CleanOptions) (Clea
 		}
 		sw.removed = append(sw.removed, dir, resolveParent(dir))
 		sw.files[dir] = sc.files
-		fmt.Fprintf(&out, "%s: %s (%s, idle %s)\n", verb, dir, size.FormatSize(sc.size), idle)
+		fmt.Fprintf(&out, "%s: %s (%s, idle %s%s)\n", verb, dir, size.FormatSize(sc.size), idle, gitNote(sc))
 		result.BytesCleaned += sc.size
 		result.FilesDeleted += sc.files
 		result.Entries = append(result.Entries, Entry{Path: dir, Size: sc.size})
@@ -369,8 +373,8 @@ func (p *DirPatternProvider) evaluate(ctx context.Context, dir string, sw *sweep
 		return sc, skipReason
 	}
 
-	if p.skipIfGitWorktree && sc.gitPath != "" {
-		return sc, "contains .git at " + sc.gitPath
+	if reason := p.gitReason(dir, sc); reason != "" {
+		return sc, reason
 	}
 
 	if idle := p.now().Sub(sc.newest); idle < p.minIdle {
@@ -405,10 +409,7 @@ func (p *DirPatternProvider) recheck(ctx context.Context, dir string, before dir
 	if sc.newest.After(before.newest) {
 		return sc, "modified during checks"
 	}
-	if p.skipIfGitWorktree && sc.gitPath != "" {
-		return sc, "contains .git at " + sc.gitPath
-	}
-	return sc, ""
+	return sc, p.gitReason(dir, sc)
 }
 
 // resolveParent returns dir with symlinks in its parent chain resolved, so a
@@ -500,12 +501,8 @@ func scanDir(ctx context.Context, dir string, rootMod, cutoff time.Time) (sc dir
 			return errRecentEntry
 		}
 
-		if IsGitMarkerName(d.Name()) && sc.gitPath == "" && path != dir {
-			rel, relErr := filepath.Rel(dir, path)
-			if relErr != nil {
-				rel = path
-			}
-			sc.gitPath = rel
+		if IsGitMarkerName(d.Name()) && path != dir {
+			sc.gitMarkers = append(sc.gitMarkers, path)
 		}
 
 		if info.Mode().IsRegular() {

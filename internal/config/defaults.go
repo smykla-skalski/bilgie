@@ -248,7 +248,8 @@ func optInCache(maxSize string, paths ...string) Provider {
 // extraCacheProviders covers browser, ML, tooling and toolchain caches.
 // huggingface covers hub only, because the cache root also holds the login
 // token. chrome-devtools-mcp skips chrome-profile-*, which holds browser
-// logins and cookies. rustup is opt-in because toolchains are not a cache.
+// logins and cookies. rustup is opt-in because toolchains are not a cache. codex-sessions is
+// opt-in because removing a rollout drops that session from codex resume.
 func extraCacheProviders(p Platform) map[string]Provider {
 	edge := perOS(p,
 		[]string{p.cache("Microsoft Edge")},
@@ -277,6 +278,12 @@ func extraCacheProviders(p Platform) map[string]Provider {
 			MaxSize:      "2G",
 			MaxAge:       "30d",
 			SkipPrefixes: []string{"chrome-profile-"},
+		},
+		"codex-sessions": {
+			Enabled: false,
+			Paths:   []string{"~/.codex/sessions"},
+			MaxSize: "20G",
+			MaxAge:  "90d",
 		},
 		"vscode-shipit": plainCache("1G", p.cache("com.microsoft.VSCode.ShipIt")),
 		"app-updaters":  openGuarded(plainCache("2G", p.cache("*-updater"))),
