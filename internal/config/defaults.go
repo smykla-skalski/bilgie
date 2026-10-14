@@ -320,7 +320,7 @@ func projectProviders() map[string]Provider {
 			Type:    TypeProjectArtifacts,
 			Paths:   append([]string(nil), projectRoots...),
 			MaxSize: "20G",
-			MinIdle: "60d",
+			MinIdle: "7d",
 			Rust:    &on,
 			Node:    &on,
 			Python:  &off,
