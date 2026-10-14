@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -30,8 +31,23 @@ func newTestDirProvider(t *testing.T, root string, mutate func(*config.Provider)
 
 	p, err := NewDirPatternProvider("sail-test", cfg)
 	require.NoError(t, err)
-	p.openCheck = func(context.Context, string) (bool, error) { return false, nil }
+	p.openMany = perDir(func(context.Context, string) (bool, error) { return false, nil })
 	return p
+}
+
+// perDir adapts a per-directory answer to the one-listing hook.
+func perDir(fn func(context.Context, string) (bool, error)) func(context.Context, []string) (map[string]bool, error) {
+	return func(ctx context.Context, dirs []string) (map[string]bool, error) {
+		open := make(map[string]bool, len(dirs))
+		for _, dir := range dirs {
+			isOpen, err := fn(ctx, dir)
+			if err != nil {
+				return nil, err
+			}
+			open[dir] = isOpen
+		}
+		return open, nil
+	}
 }
 
 func makeDir(t *testing.T, root, name string, n int, idle time.Duration) string {
@@ -200,7 +216,7 @@ func TestDirPatternSkipRules(t *testing.T) {
 
 			p := newTestDirProvider(t, root, tt.mutate)
 			if tt.openCheck != nil {
-				p.openCheck = tt.openCheck
+				p.openMany = perDir(tt.openCheck)
 			}
 
 			res, err := p.Clean(t.Context(), CleanOptions{})
@@ -225,7 +241,7 @@ func TestDirPatternGuardsCanBeDisabled(t *testing.T) {
 		c.SkipIfGitWorktree = &off
 		c.SkipIfOpen = &off
 	})
-	p.openCheck = func(context.Context, string) (bool, error) { return true, nil }
+	p.openMany = perDir(func(context.Context, string) (bool, error) { return true, nil })
 
 	_, err := p.Clean(t.Context(), CleanOptions{})
 	require.NoError(t, err)
@@ -310,7 +326,7 @@ func TestDirPatternProtectedMatchIsSkipped(t *testing.T) {
 	})
 	require.NoError(t, err)
 	p.paths = []string{home}
-	p.openCheck = func(context.Context, string) (bool, error) { return false, nil }
+	p.openMany = perDir(func(context.Context, string) (bool, error) { return false, nil })
 
 	res, err := p.Clean(t.Context(), CleanOptions{})
 	require.NoError(t, err)
@@ -392,9 +408,9 @@ func TestDirPatternActivityDuringChecksBlocksRemoval(t *testing.T) {
 	dir := makeDir(t, root, "sail-busy", 10, 10*time.Hour)
 
 	p := newTestDirProvider(t, root, nil)
-	p.openCheck = func(context.Context, string) (bool, error) {
+	p.openMany = perDir(func(context.Context, string) (bool, error) {
 		return false, os.WriteFile(filepath.Join(dir, "sub", "late.txt"), []byte("x"), 0o600)
-	}
+	})
 
 	res, err := p.Clean(t.Context(), CleanOptions{})
 	require.NoError(t, err)
@@ -407,9 +423,9 @@ func TestDirPatternGitAppearingDuringChecksBlocksRemoval(t *testing.T) {
 	dir := makeDir(t, root, "sail-late-git", 10, 10*time.Hour)
 
 	p := newTestDirProvider(t, root, nil)
-	p.openCheck = func(context.Context, string) (bool, error) {
+	p.openMany = perDir(func(context.Context, string) (bool, error) {
 		return false, os.Mkdir(filepath.Join(dir, ".git"), 0o750)
-	}
+	})
 
 	_, err := p.Clean(t.Context(), CleanOptions{})
 	require.NoError(t, err)
@@ -450,7 +466,7 @@ func TestDirPatternProtectsHomeReachedThroughSymlink(t *testing.T) {
 		Type: config.TypeDirPattern, Paths: []string{filepath.Join(sandbox, "homelink", "sail*")}, MaxSize: "1G",
 	})
 	require.NoError(t, err)
-	p.openCheck = func(context.Context, string) (bool, error) { return false, nil }
+	p.openMany = perDir(func(context.Context, string) (bool, error) { return false, nil })
 
 	res, err := p.Clean(t.Context(), CleanOptions{})
 	require.NoError(t, err)
@@ -469,7 +485,7 @@ func TestDirPatternNeverRemovesGitDirectoryItself(t *testing.T) {
 		Type: config.TypeDirPattern, Paths: []string{filepath.Join(root, "*", ".git*")}, MaxSize: "1G",
 	})
 	require.NoError(t, err)
-	p.openCheck = func(context.Context, string) (bool, error) { return false, nil }
+	p.openMany = perDir(func(context.Context, string) (bool, error) { return false, nil })
 
 	res, err := p.Clean(t.Context(), CleanOptions{})
 	require.NoError(t, err)
@@ -589,6 +605,17 @@ func TestDirPatternDuplicatePatternsCountOnce(t *testing.T) {
 	assert.Len(t, res.Entries, 2)
 }
 
+// stepClock moves the provider's clock a minute on every read, so each
+// open-file check finds the earlier listing stale and takes a new one.
+func stepClock(p *DirPatternProvider) {
+	base := time.Now()
+	var n int
+	p.now = func() time.Time {
+		n++
+		return base.Add(time.Duration(n) * time.Minute)
+	}
+}
+
 func TestDirPatternSkippedByRecheckDoesNotCreditSharedInode(t *testing.T) {
 	root := t.TempDir()
 	first := makeDir(t, root, "sail-a", 1000, 5*time.Hour)
@@ -599,13 +626,14 @@ func TestDirPatternSkippedByRecheckDoesNotCreditSharedInode(t *testing.T) {
 	ageTree(t, second, 5*time.Hour)
 
 	p := newTestDirProvider(t, root, nil)
+	stepClock(p)
 	var calls int
-	p.openCheck = func(context.Context, string) (bool, error) {
+	p.openMany = func(context.Context, []string) (map[string]bool, error) {
 		calls++
 		if calls == 3 {
-			return false, os.WriteFile(filepath.Join(second, "late.txt"), []byte("x"), 0o600)
+			return nil, os.WriteFile(filepath.Join(second, "late.txt"), []byte("x"), 0o600)
 		}
-		return false, nil
+		return map[string]bool{}, nil
 	}
 	res, err := p.Clean(t.Context(), CleanOptions{})
 	require.NoError(t, err)
@@ -622,10 +650,11 @@ func TestDirPatternRecheckRepeatsTheOpenFilesCheck(t *testing.T) {
 	second := makeDir(t, root, "sail-b", 10, 5*time.Hour)
 
 	p := newTestDirProvider(t, root, nil)
+	stepClock(p)
 	var calls int
-	p.openCheck = func(context.Context, string) (bool, error) {
+	p.openMany = func(_ context.Context, dirs []string) (map[string]bool, error) {
 		calls++
-		return calls == 3, nil
+		return map[string]bool{first: calls == 2}, nil
 	}
 	res, err := p.Clean(t.Context(), CleanOptions{})
 	require.NoError(t, err)
@@ -633,6 +662,100 @@ func TestDirPatternRecheckRepeatsTheOpenFilesCheck(t *testing.T) {
 	assert.True(t, exists(first), "opened between evaluation and removal")
 	assert.False(t, exists(second))
 	assert.Contains(t, res.Output, "skip: "+first+" (has open files)")
+}
+
+func TestDirPatternTakesOneOpenFileListingPerPass(t *testing.T) {
+	root := t.TempDir()
+	const dirs = 20
+	for i := range dirs {
+		makeDir(t, root, fmt.Sprintf("sail-%02d", i), 10, 5*time.Hour)
+	}
+
+	p := newTestDirProvider(t, root, nil)
+	var calls int
+	p.openMany = func(context.Context, []string) (map[string]bool, error) {
+		calls++
+		return map[string]bool{}, nil
+	}
+	res, err := p.Clean(t.Context(), CleanOptions{DryRun: true})
+	require.NoError(t, err)
+
+	assert.Len(t, res.Entries, dirs)
+	assert.Equal(t, 1, calls)
+}
+
+func TestDirPatternFailedListingCountsEveryDirectoryAsOpen(t *testing.T) {
+	root := t.TempDir()
+	makeDir(t, root, "sail-a", 10, 5*time.Hour)
+	makeDir(t, root, "sail-b", 10, 5*time.Hour)
+
+	p := newTestDirProvider(t, root, nil)
+	p.openMany = func(context.Context, []string) (map[string]bool, error) { return nil, errors.New("boom") }
+	res, err := p.Clean(t.Context(), CleanOptions{})
+	require.NoError(t, err)
+
+	assert.Zero(t, res.BytesCleaned)
+	assert.Equal(t, 2, strings.Count(res.Output, "open-file check failed"), res.Output)
+}
+
+func TestDirPatternRemovesOldestFirstAndStopsOnceRecovered(t *testing.T) {
+	root := t.TempDir()
+	oldest := makeDir(t, root, "sail-c", 10, 9*time.Hour)
+	middle := makeDir(t, root, "sail-a", 10, 7*time.Hour)
+	newest := makeDir(t, root, "sail-b", 10, 5*time.Hour)
+	require.NoError(t, os.Chtimes(oldest, time.Now().Add(-9*time.Hour), time.Now().Add(-9*time.Hour)))
+	require.NoError(t, os.Chtimes(middle, time.Now().Add(-7*time.Hour), time.Now().Add(-7*time.Hour)))
+	require.NoError(t, os.Chtimes(newest, time.Now().Add(-5*time.Hour), time.Now().Add(-5*time.Hour)))
+
+	p := newTestDirProvider(t, root, nil)
+	res, err := p.Clean(t.Context(), CleanOptions{
+		Recovered: func(freed int64) bool { return freed >= 20 },
+	})
+	require.NoError(t, err)
+
+	assert.False(t, exists(oldest))
+	assert.False(t, exists(middle))
+	assert.True(t, exists(newest), "the sweep stops once free space is back")
+	assert.Equal(t, int64(20), res.BytesCleaned)
+}
+
+func TestDirPatternCancelledSweepKeepsWhatItFreed(t *testing.T) {
+	root := t.TempDir()
+	first := makeDir(t, root, "sail-a", 10, 9*time.Hour)
+	second := makeDir(t, root, "sail-b", 10, 5*time.Hour)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	p := newTestDirProvider(t, root, nil)
+	res, err := p.Clean(ctx, CleanOptions{
+		Recovered: func(int64) bool {
+			cancel()
+			return false
+		},
+	})
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.False(t, exists(first))
+	assert.True(t, exists(second))
+	assert.Equal(t, int64(10), res.BytesCleaned)
+	assert.Contains(t, res.Output, "removed: "+first)
+}
+
+func TestDirPatternWalkStopsAtTheFirstRecentFile(t *testing.T) {
+	root := t.TempDir()
+	dir := makeDir(t, root, "sail-a", 10, 5*time.Hour)
+	for i := range 50 {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, fmt.Sprintf("f%02d", i)), []byte("x"), 0o600))
+	}
+	ageTree(t, dir, 5*time.Hour)
+	recent := time.Now()
+	require.NoError(t, os.Chtimes(filepath.Join(dir, "f00"), recent, recent))
+
+	cutoff := time.Now().Add(-2 * time.Hour)
+	sc, reason := scanDir(t.Context(), dir, time.Now().Add(-5*time.Hour), cutoff)
+
+	assert.Empty(t, reason)
+	assert.True(t, sc.newest.After(cutoff))
+	assert.Less(t, sc.files, int64(50), "the walk stops instead of visiting every file")
 }
 
 func TestDirPatternNestedMatchesAreScannedOnce(t *testing.T) {
@@ -681,20 +804,22 @@ func TestDirPatternTwoSpellingsOfOneDirectoryCountOnce(t *testing.T) {
 func TestDirPatternVanishedDirectoryIsSkippedNotRemoved(t *testing.T) {
 	root := t.TempDir()
 	first := makeDir(t, root, "sail-a", 10, 5*time.Hour)
-	makeDir(t, root, "sail-b", 10, 5*time.Hour)
+	second := makeDir(t, root, "sail-b", 10, 5*time.Hour)
 
 	p := newTestDirProvider(t, root, nil)
+	stepClock(p)
 	var calls int
-	p.openCheck = func(context.Context, string) (bool, error) {
+	p.openMany = func(context.Context, []string) (map[string]bool, error) {
 		calls++
 		if calls == 3 {
-			return false, os.RemoveAll(first)
+			return nil, os.RemoveAll(second)
 		}
-		return false, nil
+		return map[string]bool{}, nil
 	}
 	res, err := p.Clean(t.Context(), CleanOptions{})
 	require.NoError(t, err)
 
-	assert.NotContains(t, res.Output, "removed: "+first)
+	assert.NotContains(t, res.Output, "removed: "+second)
+	assert.Contains(t, res.Output, "removed: "+first)
 	assert.Len(t, res.Entries, 1)
 }

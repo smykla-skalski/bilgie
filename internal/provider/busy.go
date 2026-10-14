@@ -20,7 +20,6 @@ var busyProcesses = map[string][]string{
 	"go-build": {"go"},
 	"go-mod":   {"go"},
 	"homebrew": {"brew"},
-	"cargo":    {"cargo", "rustc"},
 	"gradle":   {"gradle", "gradlew"},
 	"rustup":   {"rustup", "cargo", "rustc"},
 	"uv":       {"uv"},
@@ -31,6 +30,14 @@ var busyProcesses = map[string][]string{
 // provider path, that the tool holds with flock while it uses the cache.
 var busyLockFiles = map[string]string{
 	"uv": ".lock",
+}
+
+// busyParentLockFiles maps a provider name to lock file names that sit beside
+// each provider path, in its parent directory. cargo takes them while it
+// downloads or updates its registry and git caches, not while it compiles, so
+// a long-running cargo process does not block the cargo provider.
+var busyParentLockFiles = map[string][]string{
+	"cargo": {".package-cache", ".package-cache-mutate"},
 }
 
 // busyGuard detects that a cache's owning tool is active.
@@ -48,6 +55,14 @@ func newBusyGuard(name string, paths []string) *busyGuard {
 	if lockName, ok := busyLockFiles[name]; ok {
 		for _, p := range paths {
 			locks = append(locks, filepath.Join(p, lockName))
+		}
+	}
+	for _, lockName := range busyParentLockFiles[name] {
+		for _, p := range paths {
+			lock := filepath.Join(filepath.Dir(p), lockName)
+			if !slices.Contains(locks, lock) {
+				locks = append(locks, lock)
+			}
 		}
 	}
 	if len(procs) == 0 && len(locks) == 0 {

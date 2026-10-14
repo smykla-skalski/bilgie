@@ -16,7 +16,15 @@ func TestDecodeLsofName(t *testing.T) {
 	assert.Equal(t, `/p/a^b`, decodeLsofName(`/p/a^b`))
 }
 
-func TestLsofUnderIgnoresCaseWhereVolumesDo(t *testing.T) {
-	assert.True(t, lsofUnder("/Users/X/Proj/target/f", "/Users/X/Proj/target"))
-	assert.False(t, lsofUnder("/Users/X/Proj/target2/f", "/Users/X/Proj/target"))
+func TestMarkOpenAncestorsMatchesWholeComponents(t *testing.T) {
+	byDir := map[string][]string{
+		lsofKey("/Users/X/Proj/target"):  {"/Users/X/Proj/target"},
+		lsofKey("/Users/X/Proj/target2"): {"/Users/X/Proj/target2"},
+	}
+	open := map[string]bool{}
+	markOpenAncestors(open, byDir, "/Users/X/Proj/target/a/f")
+	assert.Equal(t, map[string]bool{"/Users/X/Proj/target": true}, open)
+
+	markOpenAncestors(open, byDir, "/Users/X/Proj/target2")
+	assert.True(t, open["/Users/X/Proj/target2"])
 }

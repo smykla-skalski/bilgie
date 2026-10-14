@@ -20,6 +20,8 @@ import (
 // Project artifact defaults.
 const (
 	defaultArtifactMinIdle    = 7 * 24 * time.Hour
+	defaultCriticalMinIdle    = 2 * 24 * time.Hour
+	defaultEmergencyMinIdle   = 24 * time.Hour
 	defaultArtifactBudget     = 10 * time.Second
 	defaultArtifactPassBudget = 30 * time.Second
 	openSnapshotTTL           = 2 * time.Second
@@ -40,6 +42,7 @@ type ProjectArtifactsProvider struct {
 
 	minIdle    time.Duration
 	trimIdle   time.Duration
+	tierIdle   map[Pressure]time.Duration
 	budget     time.Duration
 	passBudget time.Duration
 	maxDepth   int
@@ -77,6 +80,18 @@ func NewProjectArtifactsProvider(name string, cfg config.Provider) (*ProjectArti
 	if err != nil {
 		return nil, err
 	}
+	critical, err := durationOr(cfg.CriticalMinIdle, defaultCriticalMinIdle, "critical_min_idle", config.ParseDuration)
+	if err != nil {
+		return nil, err
+	}
+	emergency, err := durationOr(cfg.EmergencyMinIdle, defaultEmergencyMinIdle, "emergency_min_idle", config.ParseDuration)
+	if err != nil {
+		return nil, err
+	}
+	var tierIdle map[Pressure]time.Duration
+	if boolOr(cfg.TierScaling, true) {
+		tierIdle = map[Pressure]time.Duration{PressureCritical: critical, PressureEmergency: emergency}
+	}
 	budget, err := durationOr(cfg.ScanBudget, defaultArtifactBudget, "scan_budget", config.ParseBudget)
 	if err != nil {
 		return nil, err
@@ -100,6 +115,7 @@ func NewProjectArtifactsProvider(name string, cfg config.Provider) (*ProjectArti
 		BaseProvider: base,
 		minIdle:      minIdle,
 		trimIdle:     trimIdle,
+		tierIdle:     tierIdle,
 		budget:       budget,
 		passBudget:   passBudget,
 		maxDepth:     depth,
@@ -141,6 +157,15 @@ func boolOr(v *bool, def bool) bool {
 		return def
 	}
 	return *v
+}
+
+// idleFor is the idle threshold under a pressure level: the tier value when
+// scaling is on and it is shorter than min_idle, else min_idle.
+func (p *ProjectArtifactsProvider) idleFor(pressure Pressure) time.Duration {
+	if d, ok := p.tierIdle[pressure]; ok {
+		return min(d, p.minIdle)
+	}
+	return p.minIdle
 }
 
 // SetProtected implements ProtectionAware. The paths add to the built-in ones.
@@ -216,6 +241,7 @@ func (p *ProjectArtifactsProvider) Clean(ctx context.Context, opts CleanOptions)
 	}
 
 	pass := p.newPass(ctx, scan)
+	pass.minIdle = p.idleFor(opts.Pressure)
 	pass.cands = pass.candidates(ctx)
 	pass.dryRun = opts.DryRun
 	remaining := scan.total()
@@ -264,7 +290,7 @@ func (p *ProjectArtifactsProvider) Clean(ctx context.Context, opts CleanOptions)
 			continue
 		}
 
-		detail := c.detail(p.now())
+		detail := c.detail(p.now(), pass.minIdle)
 		if !opts.DryRun {
 			gone, partial, rmErr := p.removeCandidate(ctx, c)
 			switch {
@@ -363,6 +389,8 @@ type pass struct {
 	procs    []toolProcess
 	procsErr error
 	dirty    map[string]string
+	// minIdle is the idle threshold this pass applies, after pressure scaling.
+	minIdle time.Duration
 
 	cands     []*candidate
 	firstSkip string
@@ -382,7 +410,7 @@ func (ps *pass) removalReason(ctx context.Context, c *candidate, dryRun bool) st
 		reason = ps.openReason(ctx, c)
 	}
 	if reason == "" {
-		reason = p.finalReason(ctx, c)
+		reason = p.finalReason(ctx, c, ps.minIdle)
 	}
 	if reason == "" && !dryRun {
 		reason = ps.openReasonWithin(ctx, c, removalSnapshotTTL)
@@ -493,7 +521,7 @@ func (ps *pass) openInSnapshot(ctx context.Context, path string, maxAge time.Dur
 
 // finalReason revalidates just before removal: the markers must still be
 // there and the project must not have been touched while checks ran.
-func (p *ProjectArtifactsProvider) finalReason(ctx context.Context, c *candidate) string {
+func (p *ProjectArtifactsProvider) finalReason(ctx context.Context, c *candidate, minIdle time.Duration) string {
 	if !markersValid(c.art) {
 		return "markers changed"
 	}
@@ -514,13 +542,13 @@ func (p *ProjectArtifactsProvider) finalReason(ctx context.Context, c *candidate
 	if below.After(proj.sampled) || (root.After(proj.sampled) && !root.Equal(proj.ownRoot)) {
 		return "modified during checks"
 	}
-	return p.useReason(c, true)
+	return p.useReason(c, true, minIdle)
 }
 
 // useReason skips an artifact that was built or run within min_idle, however
 // long its sources have been idle: a cron job may still start target/release/x
 // or node_modules/.bin/x. fresh recomputes instead of reusing the first reading.
-func (p *ProjectArtifactsProvider) useReason(c *candidate, fresh bool) string {
+func (p *ProjectArtifactsProvider) useReason(c *candidate, fresh bool, minIdle time.Duration) string {
 	art := c.art
 	if fresh || !art.usageRead {
 		art.used, art.usageErr = artifactUse(art)
@@ -529,8 +557,8 @@ func (p *ProjectArtifactsProvider) useReason(c *candidate, fresh bool) string {
 	if art.usageErr != nil {
 		return art.usageErr.Error()
 	}
-	if idle := p.now().Sub(art.used); idle < p.minIdle {
-		return fmt.Sprintf("artifact in use %s ago, min_idle %s", idle.Round(time.Hour), p.minIdle)
+	if idle := p.now().Sub(art.used); idle < minIdle {
+		return fmt.Sprintf("artifact in use %s ago, min_idle %s", idle.Round(time.Hour), formatIdle(minIdle))
 	}
 	return ""
 }
@@ -620,8 +648,16 @@ type candidate struct {
 	proj *project
 }
 
-func (c *candidate) detail(now time.Time) string {
-	return fmt.Sprintf("%s, project %s, idle %dd", c.art.Kind, filepath.Base(c.proj.Dir), idleDays(now, latest(c.proj.newest, c.art.used)))
+func (c *candidate) detail(now time.Time, minIdle time.Duration) string {
+	return fmt.Sprintf("%s, project %s, idle %dd, min_idle %s", c.art.Kind, filepath.Base(c.proj.Dir), idleDays(now, latest(c.proj.newest, c.art.used)), formatIdle(minIdle))
+}
+
+// formatIdle prints whole days as Nd, the unit users configure.
+func formatIdle(d time.Duration) string {
+	if d > 0 && d%(24*time.Hour) == 0 {
+		return fmt.Sprintf("%dd", d/(24*time.Hour))
+	}
+	return d.String()
 }
 
 func idleDays(now, then time.Time) int {
@@ -632,7 +668,7 @@ func idleDays(now, then time.Time) int {
 }
 
 func (p *ProjectArtifactsProvider) newPass(ctx context.Context, scan *artifactScan) *pass {
-	ps := &pass{p: p, scan: scan, dirty: map[string]string{}}
+	ps := &pass{p: p, scan: scan, minIdle: p.minIdle, dirty: map[string]string{}}
 	ps.procs, ps.procsErr = p.processes(ctx)
 	return ps
 }
@@ -679,10 +715,10 @@ func (ps *pass) cheapReason(c *candidate) string {
 	if c.proj.problem != "" {
 		return c.proj.problem
 	}
-	if idle := p.now().Sub(c.proj.newest); idle < p.minIdle {
-		return fmt.Sprintf("project active %s ago, min_idle %s", idle.Round(time.Hour), p.minIdle)
+	if idle := p.now().Sub(c.proj.newest); idle < ps.minIdle {
+		return fmt.Sprintf("project active %s ago, min_idle %s", idle.Round(time.Hour), formatIdle(ps.minIdle))
 	}
-	return p.useReason(c, false)
+	return p.useReason(c, false, ps.minIdle)
 }
 
 // guard runs every check that does not need the slow open-file probe.

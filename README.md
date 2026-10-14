@@ -132,6 +132,11 @@ Providers are auto-detected — only tools installed on your system appear in th
 | gh | 1G | file-based |
 | chrome-devtools-mcp (disabled by default; never evicts `chrome-profile-*`) | 2G | whole-entry |
 | vscode-shipit | 1G | file-based |
+| app-updaters (`~/Library/Caches/*-updater`, macOS only) | 2G | file-based; skips paths with open files |
+| copilot (macOS only) | 1G | file-based; skips paths with open files |
+| golangci-lint (macOS only) | 1G | file-based; skips paths with open files |
+| node-gyp (macOS only) | 1G | file-based; skips paths with open files |
+| sail-e2e-dirs (disabled by default; `~/Library/Caches/dev.smykla.sail.e2e.*`, macOS only) | 5G | whole-directory; idle, open-file and `.git` checks |
 | **Project artifacts** | | |
 | project-artifacts (Rust `target`, `node_modules`, Python venvs of idle projects) | 20G | whole-directory, oldest project first |
 | **Toolchains** | | |
@@ -201,7 +206,9 @@ An artifact is skipped, with the reason in `--verbose` output, when:
   relative path in its arguments, or the value of `--manifest-path`, `--prefix`, `--cwd` or
   `-C`, `-w` or `--workspace`, resolves to a place inside it (`cd ~/code && node app/server.js`,
   `npm --prefix app start`, `node app`). Dev servers such as `vite`, `next-server`, `tsx`
-  and `nodemon` count as Node tools. A working directory above the project is not enough. A process
+  and `nodemon` count as Node tools. A tool whose working directory is above the project, inside the scan
+  root, holds it unless an argument points elsewhere (`cd ~/code && cargo build` holds every Cargo
+  project below; `--manifest-path other/Cargo.toml` holds only `other`). A process
   whose working directory cannot be read counts as busy, and the skip reason names the tool and
   pid (always on Windows, where only image names are visible)
 - a process has an open file in it (`lsof`, one listing for the whole pass, or `/proc` on Linux;
@@ -232,6 +239,13 @@ by default the five largest, with kind, project and idle days, and `--verbose` l
 and every skip. When every artifact is skipped, the provider shows as skipped with the first
 reason. `status` shows the size of all artifacts and how much of it is recoverable now
 (the clean checks except the slow open-file probe).
+
+Under disk pressure the idle threshold shortens: at the critical tier the effective `min_idle`
+is `critical_min_idle` (default `2d`) and at the emergency tier `emergency_min_idle` (default
+`1d`). A configured `min_idle` that is already shorter is kept, and the ok and low tiers use
+`min_idle` unchanged. Set `tier_scaling: false` to keep `min_idle` at every tier. The dirty-tree,
+running-process, open-file, recent-artifact-use and protected-path checks apply at every tier.
+Skip reasons and the `--dry-run` and `--verbose` entries show the threshold that applied.
 
 ```yaml
 providers:
@@ -338,7 +352,7 @@ and starts no provider unless it decides to run a pass. A healthy tick prints no
 |------------|------------------|
 | healthy | nothing, except a routine pass every `auto.interval` (default 30m) that trims providers over their limit |
 | low | a full pass, at most every `auto.low_cooldown` (default 10m) |
-| critical | the same pass at the shorter `auto.critical_cooldown` (default 2m); cheapest-to-rebuild providers go first and the pass stops as soon as space recovers |
+| critical | the same pass at the shorter `auto.critical_cooldown` (default 2m); providers expected to free the most go first (rebuild cost breaks ties) and the pass stops as soon as space recovers |
 | emergency | as critical, with the stale-directory sweeps (`dir-pattern` providers such as `sail-dirs`, even when disabled) first |
 | falling | a low-tier pass when the projected free space crosses the low threshold within `auto.forecast` (default 15m) |
 
@@ -379,8 +393,10 @@ and always trims in smart mode (files older than `max_age`, then LRU to `max_siz
 |------|------------|-----------|
 | ok | at or above the low threshold | only enabled providers over their limit |
 | low | below the low threshold | every enabled provider, cheapest to rebuild first; stops once free space is back above the threshold plus the hysteresis |
-| critical | below `critical_free` | the low-tier trim, scheduled at the short cooldown |
-| emergency | below `emergency_free` | the stale-directory sweeps first (`dir-pattern` providers such as `sail-dirs`, even when disabled), then the low-tier trim |
+| critical | below `critical_free` | the low-tier trim, scheduled at the short cooldown, with the providers expected to free the most first |
+| emergency | below `emergency_free` | the stale-directory sweeps first (`dir-pattern` providers such as `sail-dirs`, even when disabled), then the critical-tier order |
+
+Each provider gets its own 10 minute budget inside the 45 minute pass deadline. A provider that exceeds it is reported as timed out with the bytes it freed so far, and the pass moves on to the next provider. The budget is fixed and not configurable.
 
 Safety rules:
 
@@ -549,6 +565,8 @@ providers:
 | `scan_budget` | `project-artifacts`: time allowed for finding projects per pass (default `10s`; units `ms`, `s`, `m`, `h`, `d`) |
 | `rust`, `node`, `python` | `project-artifacts`: per-kind switches (default `true`, `true`, `false`) |
 | `skip_if_dirty` | `project-artifacts`: skip projects with uncommitted changes (default `true`) |
+| `tier_scaling` | `project-artifacts`: shorten `min_idle` at the critical and emergency tiers (default `true`) |
+| `critical_min_idle`, `emergency_min_idle` | `project-artifacts`: idle threshold at those tiers when `tier_scaling` is on (defaults `2d`, `1d`); never raises a shorter `min_idle`; same units and minimum as `min_idle` |
 | `skip_prefixes` | Whole-entry providers never evict entries whose name starts with one of these prefixes; user values add to the built-in ones |
 
 The optional top-level `auto` block configures `bilgie tick`, `bilgie auto` and the agent. Every key is optional; the values shown are the defaults:

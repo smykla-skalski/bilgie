@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/smykla-skalski/bilgie/internal/config"
+	"github.com/smykla-skalski/bilgie/internal/osshim"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -550,17 +551,31 @@ func TestTreeProvider_VerifyFailureIsReportedNotFatal(t *testing.T) {
 	assert.Contains(t, res.Output, "note: "+fakeVerifyTool+" cache verify failed")
 }
 
-func TestTreeProvider_CargoSkipsWhileCargoRuns(t *testing.T) {
+func TestTreeProvider_CargoSkipsWhilePackageCacheLockHeld(t *testing.T) {
 	f := newCargoFixture(t)
 	p := newTree(t, "cargo", config.Provider{Paths: []string{f.root}, MaxSize: "1", MaxAge: "30d"})
-	p.busy.listProcesses = func(context.Context) ([]string, error) { return []string{"cargo build"}, nil }
+	lock := filepath.Join(filepath.Dir(f.root), ".package-cache")
+	release, acquired, err := osshim.TryLock(lock)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	defer release()
 
 	res, err := p.Clean(context.Background(), CleanOptions{Mode: CleanModeSmart})
 
 	require.NoError(t, err)
-	assert.Equal(t, "cargo is running", res.SkipReason)
+	assert.Equal(t, "lock held: "+lock, res.SkipReason)
 	assert.DirExists(t, f.oldCrate)
 	assert.FileExists(t, f.oldArchive)
+}
+
+func TestTreeProvider_CargoIgnoresRunningCargoWithoutLock(t *testing.T) {
+	f := newCargoFixture(t)
+	p := newTree(t, "cargo", config.Provider{Paths: []string{f.root}, MaxSize: "1", MaxAge: "30d"})
+
+	res, err := p.Clean(context.Background(), CleanOptions{Mode: CleanModeSmart, DryRun: true})
+
+	require.NoError(t, err)
+	assert.Empty(t, res.SkipReason)
 }
 
 func TestMatchProcess_GradleDaemon(t *testing.T) {

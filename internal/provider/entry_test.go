@@ -123,6 +123,9 @@ func TestEntryProvider_RemovalFailureIsAnError(t *testing.T) {
 	assert.Contains(t, res.Output, "error removing")
 	// RemoveAll emptied the entry before failing on the entry itself.
 	assert.Equal(t, int64(2048), res.BytesCleaned)
+	assert.Equal(t, res.BytesCleaned, entriesTotal(res), "partial removal must stay listed")
+	require.Len(t, res.Entries, 1)
+	assert.Equal(t, "partly removed", res.Entries[0].Detail)
 }
 
 func TestEntryProvider_IgnoresBookkeepingEntries(t *testing.T) {

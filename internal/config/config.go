@@ -329,6 +329,15 @@ type Provider struct {
 	Rust   *bool `mapstructure:"rust" yaml:"rust,omitempty"`
 	Node   *bool `mapstructure:"node" yaml:"node,omitempty"`
 	Python *bool `mapstructure:"python" yaml:"python,omitempty"`
+	// TierScaling lets project-artifacts shorten min_idle under disk pressure
+	// (default true). False keeps min_idle at every tier.
+	TierScaling *bool `mapstructure:"tier_scaling" yaml:"tier_scaling,omitempty"`
+	// CriticalMinIdle is the project-artifacts idle threshold at the critical
+	// tier (default 2d). A longer min_idle is not raised, only shortened.
+	CriticalMinIdle string `mapstructure:"critical_min_idle" yaml:"critical_min_idle,omitempty"`
+	// EmergencyMinIdle is the project-artifacts idle threshold at the
+	// emergency tier (default 1d).
+	EmergencyMinIdle string `mapstructure:"emergency_min_idle" yaml:"emergency_min_idle,omitempty"`
 }
 
 // TypeDirPattern is the provider type that removes whole stale directories matching a glob.
@@ -445,12 +454,15 @@ func (p Provider) validateProjectArtifacts() error {
 	if p.MaxDepth > MaxProjectDepth {
 		return fmt.Errorf("max_depth must be at most %d, got %d", MaxProjectDepth, p.MaxDepth)
 	}
-	for field, value := range map[string]string{"min_idle": p.MinIdle, "trim_idle": p.TrimIdle, "scan_budget": p.ScanBudget, "pass_budget": p.PassBudget} {
+	for field, value := range map[string]string{
+		"min_idle": p.MinIdle, "trim_idle": p.TrimIdle, "critical_min_idle": p.CriticalMinIdle, "emergency_min_idle": p.EmergencyMinIdle,
+		"scan_budget": p.ScanBudget, "pass_budget": p.PassBudget,
+	} {
 		if value == "" {
 			continue
 		}
 		parse := ParseBudget
-		if field == "min_idle" || field == "trim_idle" {
+		if strings.HasSuffix(field, "min_idle") {
 			parse = ParseDuration
 		}
 		d, err := parse(value)
