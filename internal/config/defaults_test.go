@@ -43,6 +43,15 @@ func TestDefaultProviders_Rustup(t *testing.T) {
 	assert.Equal(t, []string{"~/.rustup/toolchains"}, p.Paths)
 }
 
+func TestDefaultProviders_SQLiteCompact(t *testing.T) {
+	p, ok := DefaultProvidersFor(macPlatform)["sqlite-compact"]
+	require.True(t, ok)
+	assert.False(t, p.Enabled, "compaction is opt-in")
+	assert.Equal(t, []string{"~/.local/share/opencode/opencode.db"}, p.Paths)
+	assert.Equal(t, "1G", p.MaxSize)
+	assert.NotContains(t, DefaultProvidersFor(Platform{OS: OSWindows}), "sqlite-compact")
+}
+
 func TestDefaultProviders_HomebrewScrubsCache(t *testing.T) {
 	assert.Equal(t, "brew cleanup -s", DefaultProvidersFor(macPlatform)["homebrew"].CleanCmd)
 }

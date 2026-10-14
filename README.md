@@ -136,6 +136,7 @@ Providers are auto-detected — only tools installed on your system appear in th
 | project-artifacts (Rust `target`, `node_modules`, Python venvs of idle projects) | 20G | whole-directory, oldest project first |
 | **Toolchains** | | |
 | rustup (disabled by default; once over the limit uninstalls every toolchain except `stable`, default, active and directory-override ones) | 10G | `rustup toolchain uninstall` |
+| sqlite-compact (disabled by default; lists SQLite database files, `max_size` is the free-page size that triggers `VACUUM`) | 1G | `VACUUM`; see [sqlite-compact](#sqlite-compact) |
 
 ### Project artifacts
 
@@ -638,6 +639,41 @@ from a deliberate choice, so set `enabled: false` to turn it off in an existing 
   (a prune command also serves smart mode, so `--ci` applies there too; a clean command only replaces the full-mode default); anything else fails to load with
   `provider uv: clean_cmd must be ...`, so remove it.
 - Busy guard: skipped while `<path>/.lock` is flock-held or a `uv` process runs.
+
+### sqlite-compact
+
+`sqlite-compact` shrinks SQLite databases that hold a lot of free pages, such as the opencode
+state database (`~/.local/share/opencode/opencode.db`). SQLite never returns free pages to the
+filesystem on its own. The provider deletes no file; it runs `VACUUM` through the `sqlite3`
+binary on `PATH`. It is off by default. Enable it with `providers.sqlite-compact.enabled: true`
+and list the database files in `paths` (no globs).
+
+A database is compacted only when all of these hold; otherwise it is skipped with the reason:
+
+- No process has the database, its `-wal` or `-shm` file open (checked with `lsof`; if the
+  check fails, the database counts as in use).
+- Free pages exceed both `max_size` (default `1G`) and half of the file.
+- Free disk space is at least the size of the live data, because `VACUUM` writes a full copy.
+- `sqlite3` is found on `PATH`.
+
+`VACUUM` builds a copy and swaps it in at commit, so a failed or interrupted run leaves the
+original database intact. After each run bilgie checks `PRAGMA integrity_check` and warns if it
+does not return `ok`. `--dry-run` lists what would be compacted and runs nothing.
+
+`status` reports the free-page bytes of every listed database, including one that is in use,
+read from the database header. The provider's current size is that total. `--json` adds a
+`databases` list with `path`, `bytes`, `reclaimable_bytes` and `in_use`. The header can lag
+while a WAL is not yet checkpointed.
+
+To compact by hand: quit every process that uses the database, check that free disk space
+exceeds the live data (file size minus free pages), then run:
+
+```bash
+sqlite3 ~/.local/share/opencode/opencode.db 'VACUUM;'
+sqlite3 ~/.local/share/opencode/opencode.db 'PRAGMA integrity_check;'
+```
+
+Switching `auto_vacuum` to incremental needs one full `VACUUM` as well; bilgie does not change it.
 
 ### mise
 

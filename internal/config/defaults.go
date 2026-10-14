@@ -173,6 +173,11 @@ func otherProviders(p Platform) map[string]Provider {
 			MaxAge:   "30d",
 			CleanCmd: "uv cache clean",
 		},
+		"sqlite-compact": {
+			Enabled: false,
+			Paths:   []string{p.data("opencode/opencode.db")},
+			MaxSize: "1G",
+		},
 		"jetbrains": {
 			Enabled:  true,
 			Paths:    []string{p.cache("JetBrains")},

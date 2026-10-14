@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"io"
 	"os"
@@ -449,4 +450,29 @@ func TestStatus_ListsOnlyProvidersThatApplyOnInjectedOS(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestScanProvider_SQLiteCompactReportsDatabases(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "state.db")
+	hdr := make([]byte, 100)
+	copy(hdr, "SQLite format 3\x00")
+	binary.BigEndian.PutUint16(hdr[16:18], 4096)
+	binary.BigEndian.PutUint32(hdr[28:32], 1000)
+	binary.BigEndian.PutUint32(hdr[36:40], 600)
+	require.NoError(t, os.WriteFile(db, hdr, 0o600))
+
+	cfg := &config.Config{
+		Providers: map[string]config.Provider{
+			"sqlite-compact": {Paths: []string{db}, MaxSize: "1M", Enabled: true},
+		},
+	}
+
+	status := scanProvider(t.Context(), cfg, "sqlite-compact")
+
+	require.Empty(t, status.Error)
+	assert.Equal(t, int64(600*4096), status.Recoverable)
+	require.Len(t, status.Databases, 1)
+	assert.Equal(t, db, status.Databases[0].Path)
+	assert.Equal(t, int64(600*4096), status.Databases[0].Reclaim)
+	assert.Equal(t, int64(1000*4096), status.Databases[0].Bytes)
 }

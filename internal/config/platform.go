@@ -182,6 +182,7 @@ var providerOSes = map[string][]string{
 	"vscode-shipit":     {OSDarwin},
 	"lima":              {OSDarwin, OSLinux},
 	"gh":                {OSDarwin, OSLinux},
+	"sqlite-compact":    {OSDarwin, OSLinux},
 }
 
 // AppliesOn reports whether the named provider applies on goos. Custom

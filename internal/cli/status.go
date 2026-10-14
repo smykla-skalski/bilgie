@@ -32,6 +32,17 @@ type ProviderStatus struct {
 	DiskImageBytes int64  `json:"disk_image_bytes,omitempty"`
 	Recoverable    int64  `json:"recoverable_bytes,omitempty"`
 	OverLimit      bool   `json:"over_limit"`
+	// Databases lists each SQLite database a compaction provider manages.
+	Databases []DatabaseStatus `json:"databases,omitempty"`
+}
+
+// DatabaseStatus is one SQLite database with the free-page bytes a VACUUM would return.
+type DatabaseStatus struct {
+	Path        string `json:"path"`
+	Reclaimable string `json:"reclaimable"`
+	Bytes       int64  `json:"bytes"`
+	Reclaim     int64  `json:"reclaimable_bytes"`
+	InUse       bool   `json:"in_use"`
 }
 
 // StatusOutput holds full status output for JSON serialization.
@@ -195,6 +206,15 @@ func scanProvider(ctx context.Context, cfg *config.Config, name string) Provider
 		}
 	}
 
+	if dr, ok := p.(provider.DatabaseReporter); ok {
+		for _, db := range dr.Databases(ctx) {
+			status.Databases = append(status.Databases, DatabaseStatus{
+				Path: db.Path, Bytes: db.FileBytes, Reclaim: db.FreeBytes,
+				Reclaimable: size.FormatSize(db.FreeBytes), InUse: db.InUse || !db.InUseKnown,
+			})
+		}
+	}
+
 	return status
 }
 
@@ -276,6 +296,17 @@ func outputTable(statuses []ProviderStatus) error {
 	for i := range statuses {
 		if statuses[i].Error != "" {
 			fmt.Println(errorStyle.Render(statuses[i].Error))
+		}
+	}
+	for i := range statuses {
+		s := &statuses[i]
+		for _, db := range s.Databases {
+			state := "idle"
+			if db.InUse {
+				state = "in use"
+			}
+			fmt.Printf("  %s: %s reclaimable of %s (%s) %s\n",
+				s.Name, db.Reclaimable, size.FormatSize(db.Bytes), state, db.Path)
 		}
 	}
 	fmt.Println()

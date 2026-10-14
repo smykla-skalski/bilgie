@@ -86,6 +86,10 @@ func newProvider(name string, cfg config.Provider) (Provider, error) {
 		return NewUVProvider(name, cfg)
 	}
 
+	if name == "sqlite-compact" {
+		return NewSQLiteCompactProvider(name, cfg)
+	}
+
 	if name == "rustup" {
 		return NewRustupProvider(name, cfg)
 	}
