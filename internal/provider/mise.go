@@ -147,7 +147,7 @@ func (p *MiseProvider) Clean(ctx context.Context, opts CleanOptions) (CleanResul
 		out.WriteString("no unused tool versions\n")
 	}
 
-	trim, err := p.trimFiles(ctx, opts.DryRun)
+	trim, err := p.trimFiles(ctx, opts.DryRun, list)
 	if err != nil {
 		res.Output = strings.TrimSpace(out.String())
 		return res, err
@@ -568,7 +568,10 @@ func (p *MiseProvider) trimDirs() []string {
 	return dirs
 }
 
-func (p *MiseProvider) trimFiles(ctx context.Context, dryRun bool) (cache.TrimResult, error) {
+// trimFiles ages out downloads and cache files. A dry-run leaves out the
+// directories the prune listing already counts: a real run finds them gone,
+// so counting them again would over-report and skew the size budget.
+func (p *MiseProvider) trimFiles(ctx context.Context, dryRun bool, list []prunable) (cache.TrimResult, error) {
 	var existing []string
 	for _, d := range p.trimDirs() {
 		if info, err := os.Lstat(d); err == nil && info.IsDir() {
@@ -578,7 +581,33 @@ func (p *MiseProvider) trimFiles(ctx context.Context, dryRun bool) (cache.TrimRe
 	if len(existing) == 0 {
 		return cache.TrimResult{}, nil
 	}
-	return cache.Trim(ctx, existing, cache.TrimOptions{MaxSize: p.maxSize, MaxAge: p.maxAge, DryRun: dryRun})
+	opts := cache.TrimOptions{MaxSize: p.maxSize, MaxAge: p.maxAge, DryRun: dryRun}
+	if dryRun {
+		var listed []string
+		for _, v := range list {
+			for _, d := range append([]string{v.path}, v.extra...) {
+				if d != "" {
+					listed = append(listed, pathSpellings(d)...)
+				}
+			}
+		}
+		resolvedDirs := map[string]string{}
+		opts.Exclude = func(path string) bool {
+			dir := filepath.Dir(path)
+			resolved, ok := resolvedDirs[dir]
+			if !ok {
+				resolved = dir
+				if r, err := filepath.EvalSymlinks(dir); err == nil {
+					resolved = r
+				}
+				resolvedDirs[dir] = resolved
+			}
+			return slices.ContainsFunc(listed, func(d string) bool {
+				return pathWithin(path, d) || pathWithin(filepath.Join(resolved, filepath.Base(path)), d)
+			})
+		}
+	}
+	return cache.Trim(ctx, existing, opts)
 }
 
 var _ ProtectionAware = (*MiseProvider)(nil)
