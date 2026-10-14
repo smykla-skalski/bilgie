@@ -76,7 +76,7 @@ func walkNearHome(ctx context.Context, home string) []string {
 	var out []string
 	level := []string{home}
 	listed := 0
-	for depth := range discoverDepth {
+	for depth := range discoverDepth + 1 {
 		var next []string
 		for _, dir := range level {
 			listed++
@@ -89,6 +89,9 @@ func walkNearHome(ctx context.Context, home string) []string {
 			}
 			if depth > 0 && slices.ContainsFunc(entries, func(e os.DirEntry) bool { return provider.IsGitMarkerName(e.Name()) }) {
 				out = append(out, dir)
+				continue
+			}
+			if depth == discoverDepth {
 				continue
 			}
 			for _, e := range entries {

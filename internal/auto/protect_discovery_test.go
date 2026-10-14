@@ -76,3 +76,14 @@ func TestScanProtected_ListsDockerDesktopVolumes(t *testing.T) {
 	require.Len(t, report.Entries, 1)
 	assert.Equal(t, vms, report.Entries[0].Path)
 }
+
+func TestScanProtected_ListsCheckoutFourLevelsDownButNotFive(t *testing.T) {
+	home := sandboxHome(t)
+	mkdirFile(t, filepath.Join(home, "x", "b", "c", "d", ".git", "HEAD"), 10)
+	mkdirFile(t, filepath.Join(home, "y", "b", "c", "d", "e", ".git", "HEAD"), 10)
+
+	report := ScanProtected(t.Context(), &config.Config{}, home, time.Minute)
+
+	require.Len(t, report.Entries, 1)
+	assert.Equal(t, filepath.Join(home, "x", "b", "c", "d"), report.Entries[0].Path)
+}
