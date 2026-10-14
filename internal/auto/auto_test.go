@@ -120,14 +120,15 @@ func (f *fakeProvider) Clean(_ context.Context, o provider.CleanOptions) (provid
 }
 
 type harness struct {
-	t     *testing.T
-	cfg   *config.Config
-	calls []string
-	opts  []provider.CleanOptions
-	fakes map[string]*fakeProvider
-	out   bytes.Buffer
-	home  string
-	wrap  map[string]provider.Provider
+	t      *testing.T
+	cfg    *config.Config
+	calls  []string
+	opts   []provider.CleanOptions
+	fakes  map[string]*fakeProvider
+	out    bytes.Buffer
+	home   string
+	wrap   map[string]provider.Provider
+	budget time.Duration
 }
 
 func newHarness(t *testing.T) *harness {
@@ -189,9 +190,10 @@ func (h *harness) runWith(verbose, dryRun bool, free ...int64) (Report, error) {
 			}
 			return f, nil
 		},
-		Out:     &h.out,
-		Home:    h.home,
-		Verbose: verbose,
+		Out:            &h.out,
+		Home:           h.home,
+		Verbose:        verbose,
+		ProviderBudget: h.budget,
 	}
 	return Run(h.t.Context(), h.cfg, dryRun, deps)
 }
