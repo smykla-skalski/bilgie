@@ -133,7 +133,13 @@ func TestProjectArtifacts_RelativePathProcessesBlockRemoval(t *testing.T) {
 		{"cargo manifest path", "rust", "cargo", "cargo run --manifest-path app/Cargo.toml", func(r, _ string) string { return r }, true},
 		{"cargo manifest path equals", "rust", "cargo", "cargo run --manifest-path=app/Cargo.toml", func(r, _ string) string { return r }, true},
 		{"unrelated relative path from the parent", "node", "node", "node elsewhere/server.js", func(r, _ string) string { return r }, false},
-		{"shell in the parent with a bare tool", "node", "node", "node", func(r, _ string) string { return r }, false},
+		{"bare tool in the scan root holds the project below", "node", "node", "node", func(r, _ string) string { return r }, true},
+		{"bare cargo build in the scan root", "rust", "cargo", "cargo build", func(r, _ string) string { return r }, true},
+		{"cargo build with a flag in the scan root", "rust", "cargo", "cargo build --release -p app", func(r, _ string) string { return r }, true},
+		{"tool path and bare tool in the scan root", "node", "node", "/usr/local/bin/node", func(r, _ string) string { return r }, true},
+		{"manifest path elsewhere holds only that target", "rust", "cargo", "cargo build --manifest-path other/Cargo.toml", func(r, _ string) string { return r }, false},
+		{"absolute path elsewhere", "node", "node", "node /opt/srv/server.js", func(r, _ string) string { return r }, false},
+		{"bare tool above the scan root is not held", "node", "node", "node", func(r, _ string) string { return filepath.Dir(r) }, false},
 		{"npm prefix at a sibling", "node", "npm", "npm --prefix elsewhere start", func(r, _ string) string { return r }, false},
 	}
 	for _, tt := range tests {
