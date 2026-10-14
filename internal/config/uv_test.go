@@ -199,3 +199,14 @@ func TestStateDir_IgnoresXDGStateHome(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(home, ".local", "state", "bilgie"), dir)
 }
+
+func TestProvider_PathError_NoHome(t *testing.T) {
+	t.Setenv("HOME", "")
+	t.Setenv("USERPROFILE", "")
+
+	err := Provider{Paths: []string{"~/x"}}.PathError()
+
+	require.Error(t, err)
+	_, stateErr := StateDir()
+	require.Error(t, stateErr)
+}

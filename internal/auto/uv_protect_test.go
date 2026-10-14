@@ -2,6 +2,7 @@ package auto
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -126,4 +127,26 @@ func TestProtectionConflicts_ScanningProtectionAwareProvidersAreStillSkipped(t *
 	newProvider := func(string, config.Provider) (provider.Provider, error) { return aware, nil }
 
 	assert.Empty(t, ProtectionConflicts(t.Context(), h.cfg, h.home, newProvider))
+}
+
+func TestRunCandidate_CancelledScanIsAnError(t *testing.T) {
+	h := newHarness(t)
+	root := h.dir("c")
+	touch(t, filepath.Join(root, "a"))
+	h.add("c", true, true, func(f *fakeProvider, pc *config.Provider) {
+		pc.Paths = []string{root}
+		f.paths = []string{root}
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	deps := Deps{
+		NewProvider: func(name string, _ config.Provider) (provider.Provider, error) { return h.fakes[name], nil },
+		Home:        h.home,
+	}
+
+	res := runCandidate(ctx, h.cfg, &candidate{name: "c", cfg: h.cfg.Providers["c"]}, TierLow, false, deps, nil)
+
+	assert.Equal(t, StatusError, res.Status)
+	require.ErrorIs(t, res.Err, context.Canceled)
+	assert.Empty(t, h.calls)
 }

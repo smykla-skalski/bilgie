@@ -715,6 +715,52 @@ func TestUVProvider_UnusableLockIsASkipWithReason(t *testing.T) {
 	requireAllExist(t, files)
 }
 
+func TestUVProvider_DefaultLockLivesInTheStateDir(t *testing.T) {
+	home := isolateHome(t)
+	dir, files := uvCache(t)
+	installFakeTool(t, "uv", fakeToolSpec{})
+	p := newUVProvider(t, config.Provider{Paths: []string{dir}})
+	p.lockPath = ""
+
+	res, err := p.Clean(context.Background(), CleanOptions{Mode: CleanModeFull})
+
+	require.NoError(t, err)
+	assert.Empty(t, res.SkipReason)
+	assert.FileExists(t, filepath.Join(home, ".local", "state", "bilgie", "uv.lock"))
+	requireAllExist(t, files)
+}
+
+func TestUVProvider_UnusableStateDirIsASkipWithReason(t *testing.T) {
+	home := isolateHome(t)
+	require.NoError(t, os.WriteFile(filepath.Join(home, ".local"), []byte("not a dir"), 0o600))
+	dir, files := uvCache(t)
+	log := filepath.Join(t.TempDir(), "calls")
+	installFakeTool(t, "uv", fakeToolSpec{Default: fakeReply{Log: log}})
+	p := newUVProvider(t, config.Provider{Paths: []string{dir}})
+	p.lockPath = ""
+
+	res, err := p.Clean(context.Background(), CleanOptions{Mode: CleanModeFull})
+
+	require.NoError(t, err)
+	assert.Contains(t, res.SkipReason, "cannot take the uv lock")
+	assert.Empty(t, logLines(t, log))
+	requireAllExist(t, files)
+}
+
+func TestUVProvider_CachePathThatIsAFileIsRefused(t *testing.T) {
+	file := filepath.Join(filepath.Clean(t.TempDir()), "uv")
+	require.NoError(t, os.WriteFile(file, []byte("x"), 0o600))
+	log := filepath.Join(t.TempDir(), "calls")
+	installFakeTool(t, "uv", fakeToolSpec{Default: fakeReply{Log: log}})
+	p := newUVProvider(t, config.Provider{Paths: []string{file}})
+
+	res, err := p.Clean(context.Background(), CleanOptions{Mode: CleanModeFull})
+
+	require.NoError(t, err)
+	assert.Contains(t, res.SkipReason, "cannot verify")
+	assert.Empty(t, logLines(t, log))
+}
+
 func TestUVProvider_FailureWithoutProgressStaysASkip(t *testing.T) {
 	dir, _ := uvCache(t)
 	installFakeTool(t, "uv", fakeToolSpec{Default: fakeReply{Exit: 2, Stderr: "error: nothing removed\n"}})
