@@ -52,6 +52,12 @@ type Recoverer interface {
 	Recoverable(ctx context.Context) (int64, error)
 }
 
+// DatabaseReporter is implemented by providers that manage listed SQLite
+// databases and can report each one.
+type DatabaseReporter interface {
+	Databases(ctx context.Context) []SQLiteDatabase
+}
+
 // ProtectionAware is implemented by providers that scan for their own
 // targets below broad roots and so enforce the protected paths themselves.
 // The caller hands them the absolute protected paths, which add to the
