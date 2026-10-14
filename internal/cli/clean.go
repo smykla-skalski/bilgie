@@ -347,6 +347,9 @@ func executeClean(
 			})
 			if !quiet && text {
 				fmt.Println("error")
+				if out := strings.TrimSpace(result.Output); out != "" {
+					fmt.Println(out)
+				}
 				fmt.Println("\nCancelled")
 			}
 			skips.flush()
