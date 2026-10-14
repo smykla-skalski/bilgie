@@ -188,12 +188,10 @@ func TestSQLiteCompactRealDatabase(t *testing.T) {
 		t.Skip("sqlite3 not installed")
 	}
 	db := filepath.Join(t.TempDir(), "real.db")
-	setup := "PRAGMA journal_mode=WAL;" +
-		"CREATE TABLE t(id INTEGER PRIMARY KEY, v BLOB);" +
+	setup := "CREATE TABLE t(id INTEGER PRIMARY KEY, v BLOB);" +
 		"WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<200)" +
 		" INSERT INTO t(v) SELECT zeroblob(20000) FROM n;" +
-		"DELETE FROM t WHERE id>10;" +
-		"PRAGMA wal_checkpoint(TRUNCATE);"
+		"DELETE FROM t WHERE id>10;"
 	out, err := execSQLite(t.Context(), bin, db, setup)
 	require.NoError(t, err, out)
 
@@ -204,7 +202,7 @@ func TestSQLiteCompactRealDatabase(t *testing.T) {
 
 	before, err := p.Recoverable(t.Context())
 	require.NoError(t, err)
-	require.Positive(t, before)
+	require.Positive(t, before, "setup output: %s", out)
 
 	res, err := p.Clean(t.Context(), CleanOptions{})
 	require.NoError(t, err)
