@@ -19,7 +19,7 @@ func TestProjectArtifactsDefaultsOnEveryOS(t *testing.T) {
 			assert.True(t, pa.Enabled)
 			assert.Equal(t, TypeProjectArtifacts, pa.Type)
 			assert.Equal(t, []string{"~/sideprojects", "~/kong", "~/work", "~/src", "~/code", "~/projects"}, pa.Paths)
-			assert.Equal(t, "60d", pa.MinIdle)
+			assert.Equal(t, "7d", pa.MinIdle)
 			require.NotNil(t, pa.Rust)
 			require.NotNil(t, pa.Node)
 			require.NotNil(t, pa.Python)
@@ -42,6 +42,7 @@ func TestProjectArtifactsValidation(t *testing.T) {
 		{"relative root", func(p *Provider) { p.Paths = []string{"code"} }, "absolute"},
 		{"negative depth", func(p *Provider) { p.MaxDepth = -1 }, "max_depth"},
 		{"too deep", func(p *Provider) { p.MaxDepth = MaxProjectDepth + 1 }, "max_depth"},
+		{"bad trim_idle", func(p *Provider) { p.TrimIdle = "soon" }, "trim_idle"},
 		{"bad min_idle", func(p *Provider) { p.MinIdle = "soon" }, "min_idle"},
 		{"zero scan_budget", func(p *Provider) { p.ScanBudget = "0s" }, "scan_budget"},
 		{"valid tuning", func(p *Provider) { p.MaxDepth, p.ScanBudget, p.MinIdle = 6, "30s", "14d" }, ""},
@@ -110,6 +111,7 @@ providers:
   project-artifacts:
     python: true
     min_idle: 14d
+    trim_idle: 7d
     paths: [~/mycode, ~/other]
 `), 0o600))
 	loader := NewLoader()
@@ -122,6 +124,7 @@ providers:
 	got := cfg.Providers["project-artifacts"]
 	assert.Equal(t, []string{"~/mycode", "~/other"}, got.Paths)
 	assert.Equal(t, "14d", got.MinIdle)
+	assert.Equal(t, "7d", got.TrimIdle)
 	assert.True(t, got.Enabled)
 	assert.Equal(t, TypeProjectArtifacts, got.Type)
 	require.NotNil(t, got.Python)
@@ -148,4 +151,40 @@ func TestProjectArtifactsPassBudgetAndDepthMessages(t *testing.T) {
 	assert.ErrorContains(t, pa.validateProjectArtifacts(), "max_depth must be at most")
 	pa.MaxDepth = 3
 	assert.NoError(t, pa.validateProjectArtifacts())
+}
+
+func TestProjectArtifactsTierIdleSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`version: "1"
+providers:
+  project-artifacts:
+    tier_scaling: false
+    critical_min_idle: 3d
+    emergency_min_idle: 12h
+`), 0o600))
+	loader := NewLoader()
+	loader.SetConfigPath(path)
+	loader.SetPlatform(linPlatform)
+
+	cfg, err := loader.Load()
+
+	require.NoError(t, err)
+	got := cfg.Providers["project-artifacts"]
+	require.NotNil(t, got.TierScaling)
+	assert.False(t, *got.TierScaling)
+	assert.Equal(t, "3d", got.CriticalMinIdle)
+	assert.Equal(t, "12h", got.EmergencyMinIdle)
+	assert.Equal(t, "7d", got.MinIdle, "unset fields keep their defaults")
+}
+
+func TestProjectArtifactsTierIdleValidation(t *testing.T) {
+	for _, body := range []string{
+		"    critical_min_idle: 10s\n",
+		"    emergency_min_idle: 10s\n",
+	} {
+		cfg, err := loadAgeConfig(t, "  x:\n    type: project-artifacts\n    paths: [/a]\n    max_size: 1G\n"+body)
+		require.Error(t, err)
+		assert.Nil(t, cfg)
+		assert.Contains(t, err.Error(), "under the 1m minimum")
+	}
 }

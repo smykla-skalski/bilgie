@@ -27,6 +27,10 @@ const ArchivesProvider = "xcode-archives"
 // DockerCleanTimeout bounds Docker prune commands during an unattended run.
 const DockerCleanTimeout = 10 * time.Minute
 
+// ProviderBudget is the default time one provider may spend in a pass, so a
+// slow provider cannot starve the ones after it.
+const ProviderBudget = 10 * time.Minute
+
 // Result statuses.
 const (
 	StatusCleaned = "cleaned"
@@ -52,6 +56,8 @@ type Deps struct {
 	// as the low tier even though space is still above the threshold, and
 	// does not stop for "recovered" before any provider ran.
 	Predicted bool
+	// ProviderBudget caps each provider's run time; zero uses the default.
+	ProviderBudget time.Duration
 }
 
 // Result is one provider's outcome.
@@ -66,6 +72,9 @@ type Result struct {
 	SkippedEntries int
 	Warnings       []string
 	Freed          int64
+	// TimedOut marks a provider stopped by its own budget; Freed holds what
+	// it released before then.
+	TimedOut bool
 }
 
 // Block converts the result to the renderer's form.
@@ -179,7 +188,7 @@ func Run(ctx context.Context, cfg *config.Config, dryRun bool, deps Deps) (Repor
 			continue
 		}
 
-		res := runCandidate(ctx, cfg, c, tier, dryRun, deps, protected)
+		res := runBudgeted(ctx, cfg, c, tier, dryRun, deps, protected)
 		rep.Results = append(rep.Results, res)
 		switch {
 		case deps.Verbose:
@@ -238,8 +247,10 @@ func dryRunSuffix(dryRun bool) string {
 	return ""
 }
 
-// candidates lists the providers for a tier, cheapest to rebuild first.
-// At the emergency tier the stale-directory sweeps go first because they free
+// candidates lists the providers for a tier. At the ok and low tiers the
+// cheapest to rebuild go first. At the critical and emergency tiers the
+// providers expected to free the most go first, rebuild cost breaking ties,
+// and at the emergency tier the stale-directory sweeps lead because they free
 // the most. docker-volumes is never listed.
 func candidates(cfg *config.Config, tier Tier) []candidate {
 	var sweeps, regular []string
@@ -247,7 +258,7 @@ func candidates(cfg *config.Config, tier Tier) []candidate {
 
 	for name := range cfg.Providers {
 		pc := cfg.Providers[name]
-		if !cfg.Applies(name) || neverRun(name, pc) || (name != "docker" && pruneVolumes(pc.CleanCmd)) || !hasTargets(name, pc) {
+		if !cfg.Applies(name) || excluded(name, pc) || !hasTargets(name, pc) {
 			continue
 		}
 		switch {
@@ -260,8 +271,13 @@ func candidates(cfg *config.Config, tier Tier) []candidate {
 		}
 	}
 
-	sortByRebuildCost(sweeps)
-	sortByRebuildCost(regular)
+	if tier >= TierCritical {
+		sortByYield(sweeps)
+		sortByYield(regular)
+	} else {
+		sortByRebuildCost(sweeps)
+		sortByRebuildCost(regular)
+	}
 
 	out := make([]candidate, 0, len(byName))
 	for _, name := range append(sweeps, regular...) {
@@ -275,6 +291,12 @@ func candidates(cfg *config.Config, tier Tier) []candidate {
 // reported rather than the provider silently vanishing.
 func hasTargets(name string, pc config.Provider) bool {
 	return config.ProviderPathsExist(name, pc) || pc.Enabled && pc.DirPatternError() != nil
+}
+
+// excluded reports whether auto skips a provider outright: one it never runs
+// or a renamed one that prunes Docker volumes.
+func excluded(name string, pc config.Provider) bool {
+	return neverRun(name, pc) || (name != "docker" && pruneVolumes(pc.CleanCmd))
 }
 
 // neverRun lists the providers auto must not touch, whatever they are named.
@@ -301,6 +323,25 @@ func isXcodeArchives(path string) bool {
 func pruneVolumes(cmd string) bool {
 	lower := strings.ToLower(cmd)
 	return strings.Contains(lower, "volume")
+}
+
+// runBudgeted runs one provider under its own deadline. A provider that
+// outlives its budget is reported as timed out with what it freed so far, and
+// the pass goes on; the pass deadline still ends the run.
+func runBudgeted(ctx context.Context, cfg *config.Config, c *candidate, tier Tier, dryRun bool, deps Deps, protected []string) Result {
+	budget := deps.ProviderBudget
+	if budget <= 0 {
+		budget = ProviderBudget
+	}
+	pctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+
+	res := runCandidate(pctx, cfg, c, tier, dryRun, deps, protected)
+	if ctx.Err() == nil && errors.Is(pctx.Err(), context.DeadlineExceeded) && res.Status == StatusError {
+		res.TimedOut = true
+		res.Err = fmt.Errorf("timed out after %s, freed %s: %w", budget, size.FormatSize(res.Freed), context.DeadlineExceeded)
+	}
+	return res
 }
 
 func runCandidate(ctx context.Context, cfg *config.Config, c *candidate, tier Tier, dryRun bool, deps Deps, protected []string) Result {
@@ -361,6 +402,7 @@ func runCandidate(ctx context.Context, cfg *config.Config, c *candidate, tier Ti
 		Mode:    provider.CleanModeSmart,
 		Timeout: DockerCleanTimeout,
 	}
+	opts.Pressure = pressureFor(tier)
 	if tier != TierOK {
 		opts.Recovered = recoveredFunc(cfg, deps, dryRun)
 	}
@@ -381,6 +423,19 @@ func runCandidate(ctx context.Context, cfg *config.Config, c *candidate, tier Ti
 		res.Status = StatusCleaned
 	}
 	return res
+}
+
+// pressureFor maps a tier to the pressure level providers scale their idle
+// thresholds by; only critical and emergency shorten them.
+func pressureFor(tier Tier) provider.Pressure {
+	switch {
+	case tier >= TierEmergency:
+		return provider.PressureEmergency
+	case tier == TierCritical:
+		return provider.PressureCritical
+	default:
+		return provider.PressureNone
+	}
 }
 
 // recoveredFunc tells a provider freeing space in steps when it can stop: free
@@ -439,13 +494,25 @@ func pathReason(ctx context.Context, path string, sweep bool, home string, prote
 	return "", nil
 }
 
+// eagerGuardLimit is the most paths guardPaths verifies up front. A provider
+// with more is a large sweep: it skips protected matches one at a time as it
+// reaches them, so the first removal does not wait on a marker scan of every
+// match.
+const eagerGuardLimit = 64
+
 // guardPaths hands a path-guarded provider a guard that skips only the
-// protected matches. The provider is skipped whole only when every one of its
-// paths is off limits; the reason is then the first path's. Each path is
-// checked once: the guard reuses the verdicts found here.
+// protected matches. A provider with few paths is skipped whole when every
+// one is off limits; the reason is then the first path's. Each path is
+// checked once: the guard reuses the verdicts found here. A provider with
+// many paths is guarded lazily and never skipped whole.
 func guardPaths(ctx context.Context, p provider.Provider, g provider.PathGuarded, home string, protected []string) (string, error) {
 	paths := p.Paths()
 	reasons := make(map[string]string, len(paths))
+	if len(paths) > eagerGuardLimit {
+		g.SetPathGuard(cachedGuard(ctx, reasons, home, protected))
+		return "", nil
+	}
+
 	first, blocked := "", 0
 	for _, path := range paths {
 		reason, err := pathReason(ctx, path, true, home, protected)
@@ -463,7 +530,14 @@ func guardPaths(ctx context.Context, p provider.Provider, g provider.PathGuarded
 	if len(paths) > 0 && blocked == len(paths) {
 		return first, nil
 	}
-	g.SetPathGuard(func(path string) string {
+	g.SetPathGuard(cachedGuard(ctx, reasons, home, protected))
+	return "", nil
+}
+
+// cachedGuard answers from reasons and records the verdict of every path it
+// had to check itself.
+func cachedGuard(ctx context.Context, reasons map[string]string, home string, protected []string) func(string) string {
+	return func(path string) string {
 		if reason, ok := reasons[path]; ok {
 			return reason
 		}
@@ -471,9 +545,9 @@ func guardPaths(ctx context.Context, p provider.Provider, g provider.PathGuarded
 		if err != nil {
 			return "cancelled"
 		}
+		reasons[path] = reason
 		return reason
-	})
-	return "", nil
+	}
 }
 
 func hasResolvedProtectedName(path string) bool {

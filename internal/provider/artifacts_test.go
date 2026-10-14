@@ -1043,7 +1043,7 @@ func TestProjectArtifacts_Defaults(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	assert.Equal(t, 60*day, p.minIdle)
+	assert.Equal(t, 7*day, p.minIdle)
 	assert.Equal(t, 10*time.Second, p.budget)
 	assert.Equal(t, 4, p.maxDepth)
 	assert.True(t, p.skipDirty)
@@ -1345,4 +1345,97 @@ func TestNewProjectArtifactsProvider_AcceptsMillisecondBudgets(t *testing.T) {
 		Paths: []string{t.TempDir()}, MaxSize: "1G", MinIdle: "10ms",
 	})
 	require.Error(t, err)
+}
+
+func TestProjectArtifacts_DefaultIdleThreshold(t *testing.T) {
+	tests := []struct {
+		name    string
+		minIdle string
+		removed []string
+		kept    []string
+	}{
+		{"default 7d", "", []string{"old"}, []string{"recent"}},
+		{"explicit value wins", "30d", nil, []string{"old", "recent"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			minIdle := tt.minIdle
+			h := newArtifactHarness(t, func(c *config.Provider) { c.MinIdle = minIdle })
+			rustProject(t, h.path("old"), 100, 10*day)
+			rustProject(t, h.path("recent"), 100, 3*day)
+
+			h.clean(CleanOptions{Mode: CleanModeFull})
+
+			for _, n := range tt.removed {
+				assert.NoDirExists(t, h.path(n, "target"))
+			}
+			for _, n := range tt.kept {
+				assert.DirExists(t, h.path(n, "target"))
+			}
+		})
+	}
+}
+
+func TestProjectArtifacts_PressureShortensIdle(t *testing.T) {
+	off := false
+	tests := []struct {
+		name     string
+		mutate   func(*config.Provider)
+		pressure Pressure
+		idle     time.Duration
+		removed  bool
+		wantText string
+	}{
+		{"no pressure keeps min_idle", nil, PressureNone, 5 * day, false, "min_idle 30d"},
+		{"critical removes 3d idle", nil, PressureCritical, 3 * day, true, "min_idle 2d"},
+		{"critical keeps 36h idle", nil, PressureCritical, 36 * time.Hour, false, "min_idle 2d"},
+		{"emergency removes 2d idle", nil, PressureEmergency, 2 * day, true, "min_idle 1d"},
+		{"emergency keeps 12h idle", nil, PressureEmergency, 12 * time.Hour, false, "min_idle 1d"},
+		{"scaling off keeps min_idle", func(c *config.Provider) { c.TierScaling = &off }, PressureEmergency, 5 * day, false, "min_idle 30d"},
+		{"custom critical value", func(c *config.Provider) { c.CriticalMinIdle = "10d" }, PressureCritical, 11 * day, true, "min_idle 10d"},
+		{"never raises a shorter min_idle", func(c *config.Provider) { c.MinIdle = "12h" }, PressureEmergency, 18 * time.Hour, true, "min_idle 12h"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newArtifactHarness(t, tt.mutate)
+			rustProject(t, h.path("api"), 100, tt.idle)
+
+			res := h.clean(CleanOptions{Mode: CleanModeFull, DryRun: true, Pressure: tt.pressure})
+
+			assert.Contains(t, res.Output, tt.wantText)
+			if tt.removed {
+				require.Len(t, res.Entries, 1)
+				assert.Contains(t, res.Entries[0].Detail, tt.wantText)
+				return
+			}
+			assert.Empty(t, res.Entries)
+			assert.Contains(t, res.Output, "skip: ")
+		})
+	}
+}
+
+func TestProjectArtifacts_PressureKeepsSafetyChecks(t *testing.T) {
+	h := newArtifactHarness(t, nil)
+	rustProject(t, h.path("dirty"), 100, 5*day)
+	gitRepo(t, h.path("dirty"), 5*day)
+	h.dirty[h.path("dirty")] = true
+	rustProject(t, h.path("quiet"), 100, 5*day)
+	gitRepo(t, h.path("quiet"), 5*day)
+
+	res := h.clean(CleanOptions{Mode: CleanModeFull, DryRun: true, Pressure: PressureEmergency})
+
+	assert.Equal(t, []string{h.path("quiet", "target")}, h.entryPaths(res))
+	assert.Contains(t, res.Output, "skip: "+h.path("dirty", "target"))
+}
+
+func TestProjectArtifacts_PressureConfigErrors(t *testing.T) {
+	for _, mutate := range []func(*config.Provider){
+		func(c *config.Provider) { c.CriticalMinIdle = "soon" },
+		func(c *config.Provider) { c.EmergencyMinIdle = "-1d" },
+	} {
+		cfg := config.Provider{Type: config.TypeProjectArtifacts, Paths: []string{t.TempDir()}, MaxSize: "1G"}
+		mutate(&cfg)
+		_, err := NewProjectArtifactsProvider("project-artifacts", cfg)
+		require.Error(t, err)
+	}
 }

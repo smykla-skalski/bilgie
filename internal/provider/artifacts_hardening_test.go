@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/smykla-skalski/bilgie/internal/config"
+	"github.com/smykla-skalski/bilgie/internal/osshim"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -133,11 +134,24 @@ func TestProjectArtifacts_RelativePathProcessesBlockRemoval(t *testing.T) {
 		{"cargo manifest path", "rust", "cargo", "cargo run --manifest-path app/Cargo.toml", func(r, _ string) string { return r }, true},
 		{"cargo manifest path equals", "rust", "cargo", "cargo run --manifest-path=app/Cargo.toml", func(r, _ string) string { return r }, true},
 		{"unrelated relative path from the parent", "node", "node", "node elsewhere/server.js", func(r, _ string) string { return r }, false},
-		{"shell in the parent with a bare tool", "node", "node", "node", func(r, _ string) string { return r }, false},
+		{"bare tool in the scan root holds the project below", "node", "node", "node", func(r, _ string) string { return r }, true},
+		{"bare cargo build in the scan root", "rust", "cargo", "cargo build", func(r, _ string) string { return r }, true},
+		{"cargo build with a flag in the scan root", "rust", "cargo", "cargo build --release -p app", func(r, _ string) string { return r }, true},
+		{"tool path and bare tool in the scan root", "node", "node", "/usr/local/bin/node", func(r, _ string) string { return r }, true},
+		{"manifest path elsewhere holds only that target", "rust", "cargo", "cargo build --manifest-path other/Cargo.toml", func(r, _ string) string { return r }, false},
+		{"absolute path elsewhere", "node", "node", "node other/server.js", func(r, _ string) string { return r }, false},
+		{"same-named dir does not hide the tool", "rust", "cargo", "cargo build", func(r, _ string) string { return r }, true},
+		{"launcher script outside the root", "node", "node", "node /opt/homebrew/lib/node_modules/npm/bin/npm-cli.js run build", func(r, _ string) string { return r }, true},
+		{"target dir value, separate token", "rust", "cargo", "cargo build --target-dir /tmp/t", func(r, _ string) string { return r }, true},
+		{"feature value with a slash", "rust", "cargo", "cargo build --features a/b", func(r, _ string) string { return r }, true},
+		{"bare tool above the scan root is not held", "node", "node", "node", func(r, _ string) string { return filepath.Dir(r) }, false},
 		{"npm prefix at a sibling", "node", "npm", "npm --prefix elsewhere start", func(r, _ string) string { return r }, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if runtime.GOOS == "windows" && strings.Contains(tt.cmd, " /") {
+				t.Skip("posix absolute paths")
+			}
 			h := newArtifactHarness(t, nil)
 			if tt.kind == "node" {
 				nodeProject(t, h.path("app"), 100, 90*day)
@@ -145,6 +159,7 @@ func TestProjectArtifacts_RelativePathProcessesBlockRemoval(t *testing.T) {
 				rustProject(t, h.path("app"), 100, 90*day)
 			}
 			require.NoError(t, os.MkdirAll(h.path("other"), 0o750))
+			require.NoError(t, os.MkdirAll(h.path("build"), 0o750))
 			root := evalDir(t, h.root)
 			proj := evalDir(t, h.path("app"))
 			h.p.processes = func(context.Context) ([]toolProcess, error) {
@@ -167,7 +182,38 @@ func TestProjectArtifacts_RelativePathProcessesBlockRemoval(t *testing.T) {
 	}
 }
 
-func TestProjectArtifacts_TruncatedSampleFailsClosedInGitRepos(t *testing.T) {
+func TestProjectArtifacts_OversizedGitProjectIsJudgedFromGit(t *testing.T) {
+	tests := []struct {
+		name    string
+		idle    time.Duration
+		removed bool
+	}{
+		{"idle git activity", 90 * day, true},
+		{"recent git activity", day, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newArtifactHarness(t, nil)
+			rustProject(t, h.path("api"), 100, 90*day)
+			for i := range sampleLimit + 5 {
+				writeFile(t, h.path("api", "docs", fmt.Sprintf("f%05d.md", i)), "x")
+			}
+			ageTree(t, h.path("api", "docs"), 90*day)
+			gitRepo(t, h.path("api"), tt.idle)
+
+			res := h.clean(CleanOptions{Mode: CleanModeFull})
+
+			assert.NotContains(t, res.Output, "too many files")
+			if tt.removed {
+				assert.NoDirExists(t, h.path("api", "target"))
+			} else {
+				assert.DirExists(t, h.path("api", "target"))
+			}
+		})
+	}
+}
+
+func TestProjectArtifacts_OversizedGitProjectStillHonoursDirtyTree(t *testing.T) {
 	h := newArtifactHarness(t, nil)
 	rustProject(t, h.path("api"), 100, 90*day)
 	for i := range sampleLimit + 5 {
@@ -175,11 +221,75 @@ func TestProjectArtifacts_TruncatedSampleFailsClosedInGitRepos(t *testing.T) {
 	}
 	ageTree(t, h.path("api", "docs"), 90*day)
 	gitRepo(t, h.path("api"), 90*day)
+	h.p.git = func(context.Context, string, ...string) (string, error) { return " M main.rs\n", nil }
 
 	res := h.clean(CleanOptions{Mode: CleanModeFull})
 
 	assert.DirExists(t, h.path("api", "target"))
-	assert.Contains(t, res.Output, "too many files")
+	assert.Contains(t, res.Output, "uncommitted changes")
+}
+
+func osProcs(pids ...int) func(context.Context) ([]osshim.Process, error) {
+	return func(context.Context) ([]osshim.Process, error) {
+		rows := make([]osshim.Process, len(pids))
+		for i, pid := range pids {
+			rows[i] = osshim.Process{PID: pid, CommandLine: "node server.js"}
+		}
+		return rows, nil
+	}
+}
+
+func TestLookupToolProcessesWith_RetriesUnreadableDirectories(t *testing.T) {
+	t.Run("readable on the second read", func(t *testing.T) {
+		calls := 0
+		cwds := func(_ context.Context, pids []int) (map[int]string, error) {
+			calls++
+			if calls == 1 {
+				return map[int]string{}, nil
+			}
+			return map[int]string{pids[0]: "/work"}, nil
+		}
+		procs, err := lookupToolProcessesWith(context.Background(), osProcs(4242), cwds)
+		require.NoError(t, err)
+		require.Len(t, procs, 1)
+		assert.Equal(t, "/work", procs[0].Cwd)
+		assert.Equal(t, 2, calls)
+	})
+	t.Run("exited before the second read", func(t *testing.T) {
+		reads := 0
+		table := func(ctx context.Context) ([]osshim.Process, error) {
+			reads++
+			if reads == 1 {
+				return osProcs(4242)(ctx)
+			}
+			return nil, nil
+		}
+		cwds := func(context.Context, []int) (map[int]string, error) { return map[int]string{}, nil }
+		procs, err := lookupToolProcessesWith(context.Background(), table, cwds)
+		require.NoError(t, err)
+		assert.Empty(t, procs)
+	})
+	t.Run("still unreadable keeps blocking", func(t *testing.T) {
+		cwds := func(context.Context, []int) (map[int]string, error) { return map[int]string{}, nil }
+		procs, err := lookupToolProcessesWith(context.Background(), osProcs(4242), cwds)
+		require.NoError(t, err)
+		require.Len(t, procs, 1)
+		assert.Empty(t, procs[0].Cwd)
+		assert.Equal(t, 4242, procs[0].pid)
+	})
+	t.Run("readable processes cost no second read", func(t *testing.T) {
+		reads := 0
+		table := func(ctx context.Context) ([]osshim.Process, error) {
+			reads++
+			return osProcs(4242)(ctx)
+		}
+		cwds := func(_ context.Context, pids []int) (map[int]string, error) {
+			return map[int]string{pids[0]: "/work"}, nil
+		}
+		_, err := lookupToolProcessesWith(context.Background(), table, cwds)
+		require.NoError(t, err)
+		assert.Equal(t, 1, reads)
+	})
 }
 
 func TestProjectArtifacts_SourceDirectoriesNamedLikeArtifactsAreSampled(t *testing.T) {
@@ -604,7 +714,7 @@ func TestProjectArtifacts_UnreadableDirectoryNamesToolAndPid(t *testing.T) {
 
 	res := h.clean(CleanOptions{Mode: CleanModeFull})
 
-	assert.Contains(t, res.Output, "node (pid 4242) is running and its directory cannot be read")
+	assert.Contains(t, res.Output, "node (pid 4242, node x.js) is running and its directory cannot be read")
 }
 
 func TestProjectArtifacts_RootsDifferingOnlyByCaseScanOnce(t *testing.T) {
@@ -835,4 +945,75 @@ func TestProjectArtifacts_EmptyUsableRootBesideRefusedIsNotSkipped(t *testing.T)
 	assert.Empty(t, res.SkipReason)
 	require.Len(t, res.Warnings, 1)
 	assert.Contains(t, res.Warnings[0], "root not scanned")
+}
+
+func TestLookupToolProcessesWith_FailureModes(t *testing.T) {
+	noCwds := func(context.Context, []int) (map[int]string, error) { return map[int]string{}, nil }
+	boom := errors.New("boom")
+
+	t.Run("table error fails closed", func(t *testing.T) {
+		table := func(context.Context) ([]osshim.Process, error) { return nil, boom }
+		_, err := lookupToolProcessesWith(context.Background(), table, noCwds)
+		require.ErrorIs(t, err, boom)
+	})
+	t.Run("no tool processes", func(t *testing.T) {
+		procs, err := lookupToolProcessesWith(context.Background(), osProcs(), noCwds)
+		require.NoError(t, err)
+		assert.Empty(t, procs)
+	})
+	t.Run("cwd lookup error marks every process unknown", func(t *testing.T) {
+		cwds := func(context.Context, []int) (map[int]string, error) { return nil, boom }
+		procs, err := lookupToolProcessesWith(context.Background(), osProcs(4242), cwds)
+		require.NoError(t, err)
+		require.Len(t, procs, 1)
+		assert.True(t, procs[0].CwdUnknown)
+	})
+	t.Run("second table error keeps the process", func(t *testing.T) {
+		reads := 0
+		table := func(ctx context.Context) ([]osshim.Process, error) {
+			reads++
+			if reads > 1 {
+				return nil, boom
+			}
+			return osProcs(4242)(ctx)
+		}
+		procs, err := lookupToolProcessesWith(context.Background(), table, noCwds)
+		require.NoError(t, err)
+		assert.Len(t, procs, 1)
+	})
+	t.Run("second cwd error keeps the process", func(t *testing.T) {
+		calls := 0
+		cwds := func(context.Context, []int) (map[int]string, error) {
+			calls++
+			if calls > 1 {
+				return nil, boom
+			}
+			return map[int]string{}, nil
+		}
+		procs, err := lookupToolProcessesWith(context.Background(), osProcs(4242), cwds)
+		require.NoError(t, err)
+		assert.Len(t, procs, 1)
+	})
+}
+
+func TestProcLabel(t *testing.T) {
+	assert.Empty(t, procLabel(toolProcess{CommandLine: "node x.js"}))
+	assert.Equal(t, " (pid 7)", procLabel(toolProcess{pid: 7}))
+	long := procLabel(toolProcess{pid: 7, CommandLine: "node " + strings.Repeat("a", 200)})
+	assert.True(t, strings.HasSuffix(long, "...)"))
+	assert.Less(t, len(long), 100)
+}
+
+func TestMeasureTree_CountsHardLinkOnce(t *testing.T) {
+	dir := t.TempDir()
+	orig := filepath.Join(dir, "a.bin")
+	require.NoError(t, os.WriteFile(orig, make([]byte, 1000), 0o600))
+	linkOrSkip(t, orig, filepath.Join(dir, "b.bin"))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "c.bin"), make([]byte, 10), 0o600))
+
+	size, files, unreadable := measureTree(context.Background(), dir)
+
+	assert.False(t, unreadable)
+	assert.Equal(t, int64(1010), size)
+	assert.Equal(t, int64(3), files)
 }

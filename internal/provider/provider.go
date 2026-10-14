@@ -74,10 +74,24 @@ type PathGuarded interface {
 	SetPathGuard(guard func(path string) string)
 }
 
+// Pressure is the disk-pressure level a clean runs under. Providers that
+// scale an idle threshold read it; the rest ignore it.
+type Pressure int
+
+// Pressure levels, lowest to highest.
+const (
+	PressureNone Pressure = iota
+	PressureCritical
+	PressureEmergency
+)
+
 // CleanOptions configures cleaning behavior.
 type CleanOptions struct {
 	DryRun bool
 	Mode   CleanMode
+	// Pressure shortens project-artifacts' idle threshold at the critical and
+	// emergency tiers. The zero value applies the configured threshold.
+	Pressure Pressure
 	// Timeout bounds Docker's prune command when positive. Other providers
 	// keep their own clean_timeout. Zero leaves Docker unbounded.
 	Timeout time.Duration

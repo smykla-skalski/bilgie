@@ -187,6 +187,9 @@ func mergeProjectArtifacts(l *Loader, name string, merged, user *Provider) {
 	if l.v.IsSet(prefix + "max_depth") {
 		merged.MaxDepth = user.MaxDepth
 	}
+	if l.v.IsSet(prefix + "trim_idle") {
+		merged.TrimIdle = user.TrimIdle
+	}
 	if l.v.IsSet(prefix + "scan_budget") {
 		merged.ScanBudget = user.ScanBudget
 	}
@@ -204,6 +207,15 @@ func mergeProjectArtifacts(l *Loader, name string, merged, user *Provider) {
 	}
 	if l.v.IsSet(prefix + "python") {
 		merged.Python = user.Python
+	}
+	if l.v.IsSet(prefix + "tier_scaling") {
+		merged.TierScaling = user.TierScaling
+	}
+	if l.v.IsSet(prefix + "critical_min_idle") {
+		merged.CriticalMinIdle = user.CriticalMinIdle
+	}
+	if l.v.IsSet(prefix + "emergency_min_idle") {
+		merged.EmergencyMinIdle = user.EmergencyMinIdle
 	}
 }
 
