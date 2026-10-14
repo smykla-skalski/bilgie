@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/smykla-skalski/bilgie/internal/osshim"
 )
 
 type artifactKind string
@@ -405,11 +407,13 @@ feed:
 	return ctx.Err()
 }
 
-// measureTree sums regular file sizes without following symlinks.
+// measureTree sums regular file sizes without following symlinks. A
+// hard-linked file counts once in the tree; files still counts every path.
 // unreadable reports entries that could not be read, which makes the size a
 // lower bound and the tree one that cannot be proven removable whole.
 func measureTree(ctx context.Context, dir string) (total, files int64, unreadable bool) {
-	_ = filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+	var links osshim.LinkSet
+	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -425,8 +429,11 @@ func measureTree(ctx context.Context, dir string) (total, files int64, unreadabl
 			unreadable = unreadable || !errors.Is(infoErr, fs.ErrNotExist)
 			return nil
 		}
-		total += info.Size()
 		files++
+		if id, _, shared := osshim.SharedFileID(path, info); shared && !links.Add(id) {
+			return nil
+		}
+		total += info.Size()
 		return nil
 	})
 	return total, files, unreadable

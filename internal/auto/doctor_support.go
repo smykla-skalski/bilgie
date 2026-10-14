@@ -247,7 +247,7 @@ func LoadErrors(
 	var out []error
 	for _, name := range names {
 		pc := cfg.Providers[name]
-		if !pc.Enabled || !cfg.Applies(name) || neverRun(name, pc) {
+		if !pc.Enabled || !cfg.Applies(name) || excluded(name, pc) {
 			continue
 		}
 		if !hasTargets(name, pc) {

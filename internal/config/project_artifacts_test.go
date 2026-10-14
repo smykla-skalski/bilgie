@@ -19,7 +19,7 @@ func TestProjectArtifactsDefaultsOnEveryOS(t *testing.T) {
 			assert.True(t, pa.Enabled)
 			assert.Equal(t, TypeProjectArtifacts, pa.Type)
 			assert.Equal(t, []string{"~/sideprojects", "~/kong", "~/work", "~/src", "~/code", "~/projects"}, pa.Paths)
-			assert.Equal(t, "60d", pa.MinIdle)
+			assert.Equal(t, "7d", pa.MinIdle)
 			require.NotNil(t, pa.Rust)
 			require.NotNil(t, pa.Node)
 			require.NotNil(t, pa.Python)

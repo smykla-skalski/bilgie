@@ -247,7 +247,7 @@ func candidates(cfg *config.Config, tier Tier) []candidate {
 
 	for name := range cfg.Providers {
 		pc := cfg.Providers[name]
-		if !cfg.Applies(name) || neverRun(name, pc) || (name != "docker" && pruneVolumes(pc.CleanCmd)) || !hasTargets(name, pc) {
+		if !cfg.Applies(name) || excluded(name, pc) || !hasTargets(name, pc) {
 			continue
 		}
 		switch {
@@ -275,6 +275,12 @@ func candidates(cfg *config.Config, tier Tier) []candidate {
 // reported rather than the provider silently vanishing.
 func hasTargets(name string, pc config.Provider) bool {
 	return config.ProviderPathsExist(name, pc) || pc.Enabled && pc.DirPatternError() != nil
+}
+
+// excluded reports whether auto skips a provider outright: one it never runs
+// or a renamed one that prunes Docker volumes.
+func excluded(name string, pc config.Provider) bool {
+	return neverRun(name, pc) || (name != "docker" && pruneVolumes(pc.CleanCmd))
 }
 
 // neverRun lists the providers auto must not touch, whatever they are named.
