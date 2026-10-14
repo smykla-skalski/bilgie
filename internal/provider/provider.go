@@ -60,6 +60,14 @@ type ProtectionAware interface {
 	SetProtected(paths []string)
 }
 
+// RootGuarded is implemented by ProtectionAware providers whose one path is a
+// cache directory they hand to a tool that empties it as a whole. The caller
+// checks that directory like any other provider path, without scanning below
+// it for checkouts: the provider verifies the directory's content itself.
+type RootGuarded interface {
+	GuardsRoot()
+}
+
 // PathGuarded is implemented by providers that work through many matched
 // paths and can skip single ones. The guard returns why a path is off
 // limits, or "" when it is clear. A guarded provider skips the protected

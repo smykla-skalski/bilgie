@@ -717,10 +717,40 @@ func foldContains(text, sub string) bool {
 	return sub != "" && strings.Contains(foldPathText(text), foldPathText(sub))
 }
 
+// stripVerbatimPrefix turns a Windows verbatim path (\\?\C:\x, \\?\UNC\h\s)
+// into its plain spelling, so it compares equal to a protected root written
+// without the prefix. Other paths are returned unchanged.
+func stripVerbatimPrefix(path string) string {
+	rest, ok := strings.CutPrefix(path, `\\?\`)
+	if !ok {
+		return path
+	}
+	if unc, isUNC := cutFold(rest, `UNC\`); isUNC {
+		return `\\` + unc
+	}
+	if hasDriveLetter(rest) {
+		return rest
+	}
+	return path
+}
+
+func cutFold(s, prefix string) (string, bool) {
+	if len(s) >= len(prefix) && strings.EqualFold(s[:len(prefix)], prefix) {
+		return s[len(prefix):], true
+	}
+	return s, false
+}
+
+func hasDriveLetter(path string) bool {
+	return len(path) >= 2 && path[1] == ':' &&
+		(path[0] >= 'a' && path[0] <= 'z' || path[0] >= 'A' && path[0] <= 'Z')
+}
+
 // pathWithin reports whether path equals root or lies below it, comparing
 // case-insensitively where the default filesystem does.
 func pathWithin(path, root string) bool {
-	path, root = foldPathText(filepath.Clean(path)), foldPathText(filepath.Clean(root))
+	path = foldPathText(filepath.Clean(stripVerbatimPrefix(path)))
+	root = foldPathText(filepath.Clean(stripVerbatimPrefix(root)))
 	if path == root {
 		return true
 	}

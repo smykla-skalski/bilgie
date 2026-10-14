@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"slices"
+	"strings"
 
 	"github.com/kballard/go-shellquote"
 	"github.com/smykla-skalski/bilgie/internal/config"
@@ -64,7 +65,23 @@ func runConfigShowWithLoader(loader *config.Loader) error {
 	for _, note := range defaultDriftNotes(cfg) {
 		fmt.Println(note)
 	}
-	return nil
+	return pathProblems(cfg)
+}
+
+// pathProblems fails config show for an enabled provider whose paths clean and
+// status would reject, so the problem does not wait for the next clean.
+func pathProblems(cfg *config.Config) error {
+	var lines []string
+	for _, name := range cfg.AllEnabledProviders() {
+		pc, _ := cfg.GetProvider(name)
+		if err := pc.PathError(); err != nil {
+			lines = append(lines, fmt.Sprintf("provider %s: %v", name, err))
+		}
+	}
+	if len(lines) == 0 {
+		return nil
+	}
+	return fmt.Errorf("invalid provider paths:\n%s", strings.Join(lines, "\n"))
 }
 
 // defaultDriftNotes returns a YAML comment for each provider whose saved

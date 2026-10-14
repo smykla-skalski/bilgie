@@ -205,16 +205,19 @@ func ProtectionConflicts(
 		if err != nil {
 			continue
 		}
-		if _, aware := p.(provider.ProtectionAware); aware {
-			continue
-		}
 		var (
 			reason string
 			ctxErr error
 		)
-		if g, guarded := p.(provider.PathGuarded); guarded {
+		switch g := p.(type) {
+		case provider.ProtectionAware:
+			if _, root := p.(provider.RootGuarded); !root {
+				continue
+			}
+			reason, ctxErr = rootReason(ctx, p, home, protected)
+		case provider.PathGuarded:
 			reason, ctxErr = guardPaths(ctx, p, g, home, protected)
-		} else {
+		default:
 			reason, ctxErr = protectedReason(ctx, p, pc.Type == config.TypeDirPattern, home, protected)
 		}
 		if ctxErr != nil {

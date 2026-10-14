@@ -9,9 +9,19 @@ import (
 	"testing"
 
 	"github.com/smykla-skalski/bilgie/internal/config"
+	"github.com/smykla-skalski/bilgie/internal/osshim"
+	"github.com/smykla-skalski/bilgie/pkg/size"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// uvTagBody is what uv writes to CACHEDIR.TAG in a cache it created.
+const uvTagBody = cacheDirTagSignature + "\n# This file is a cache directory tag created by uv.\n"
+
+func writeUVTag(t *testing.T, dir string) {
+	t.Helper()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "CACHEDIR.TAG"), []byte(uvTagBody), 0o600))
+}
 
 // uvCache builds a uv-shaped cache: a wheels pointer that names an archive.
 func uvCache(t *testing.T) (dir string, files []string) {
@@ -23,12 +33,12 @@ func uvCache(t *testing.T) (dir string, files []string) {
 	files = []string{
 		filepath.Join(archive, "mod.py"),
 		filepath.Join(dir, "wheels-v5", "pointer.rkyv"),
-		filepath.Join(dir, "CACHEDIR.TAG"),
 	}
 	for _, f := range files {
 		require.NoError(t, os.WriteFile(f, make([]byte, 128), 0o600))
 	}
-	return dir, files
+	writeUVTag(t, dir)
+	return dir, append(files, filepath.Join(dir, "CACHEDIR.TAG"))
 }
 
 func newUVProvider(t *testing.T, cfg config.Provider) *UVProvider {
@@ -39,6 +49,7 @@ func newUVProvider(t *testing.T, cfg config.Provider) *UVProvider {
 	}
 	p, err := NewUVProvider("uv", cfg)
 	require.NoError(t, err)
+	p.lockPath = filepath.Join(t.TempDir(), "uv.lock")
 	p.busy.listProcesses = func(context.Context) ([]string, error) { return nil, nil }
 	return p
 }
@@ -125,7 +136,7 @@ func TestUVProvider_DryRunReportsCommandAndSize(t *testing.T) {
 		res, err := p.Clean(context.Background(), CleanOptions{Mode: mode, DryRun: true})
 		require.NoError(t, err)
 		assert.Contains(t, res.Output, want)
-		assert.Contains(t, res.Output, "384 B")
+		assert.Contains(t, res.Output, size.FormatSize(int64(256+len(uvTagBody))))
 		assert.Zero(t, res.BytesCleaned)
 	}
 	assert.Empty(t, logLines(t, log), "dry-run must not run uv")
@@ -206,8 +217,9 @@ func TestUVProvider_FailureReportsPartialFreedBytes(t *testing.T) {
 	p := newUVProvider(t, config.Provider{Paths: []string{dir}})
 
 	res, err := p.Clean(context.Background(), CleanOptions{Mode: CleanModeSmart})
-	require.NoError(t, err)
-	assert.Contains(t, res.SkipReason, "late failure")
+	require.Error(t, err, "a half-cleaned cache is an error, not a skip")
+	assert.Contains(t, err.Error(), "late failure")
+	assert.Empty(t, res.SkipReason)
 	assert.Equal(t, int64(128), res.BytesCleaned, "what uv removed before failing still counts")
 	assert.Contains(t, res.Output, "freed")
 	requireAllExist(t, files[1:])
@@ -221,8 +233,9 @@ func TestUVProvider_TimeoutReportsPartialFreedBytes(t *testing.T) {
 	p := newUVProvider(t, config.Provider{Paths: []string{dir}, CleanTimeout: "500ms"})
 
 	res, err := p.Clean(context.Background(), CleanOptions{Mode: CleanModeFull})
-	require.NoError(t, err)
-	assert.Contains(t, res.SkipReason, "timed out")
+	require.Error(t, err, "a half-cleaned cache is an error, not a skip")
+	assert.Contains(t, err.Error(), "timed out")
+	assert.Empty(t, res.SkipReason)
 	assert.Equal(t, int64(128), res.BytesCleaned)
 }
 
@@ -270,6 +283,7 @@ func TestUVProvider_UVCacheDirHonored(t *testing.T) {
 	custom := filepath.Join(filepath.Clean(t.TempDir()), "uvc")
 	require.NoError(t, os.MkdirAll(custom, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(custom, "blob"), make([]byte, 64), 0o600))
+	writeUVTag(t, custom)
 	t.Setenv("UV_CACHE_DIR", custom)
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	log := filepath.Join(t.TempDir(), "calls")
@@ -280,7 +294,7 @@ func TestUVProvider_UVCacheDirHonored(t *testing.T) {
 
 	dry, err := p.Clean(context.Background(), CleanOptions{DryRun: true})
 	require.NoError(t, err)
-	assert.Contains(t, dry.Output, "64 B")
+	assert.Contains(t, dry.Output, size.FormatSize(int64(64+len(uvTagBody))))
 
 	_, err = p.Clean(context.Background(), CleanOptions{Mode: CleanModeSmart})
 	require.NoError(t, err)
@@ -409,6 +423,7 @@ func TestUVProvider_EnvDirWithGlobCharactersStaysLiteral(t *testing.T) {
 			for _, d := range []string{literal, sibling} {
 				require.NoError(t, os.MkdirAll(d, 0o700))
 				require.NoError(t, os.WriteFile(filepath.Join(d, "blob"), make([]byte, 64), 0o600))
+				writeUVTag(t, d)
 			}
 			log := filepath.Join(t.TempDir(), "calls")
 			installFakeTool(t, "uv", fakeToolSpec{Default: fakeReply{Log: log}})
@@ -470,6 +485,7 @@ func TestNewUVProvider_ExplicitGlobNamedDirIsLiteral(t *testing.T) {
 	for _, d := range []string{literal, sibling} {
 		require.NoError(t, os.MkdirAll(d, 0o700))
 		require.NoError(t, os.WriteFile(filepath.Join(d, "blob"), make([]byte, 8), 0o600))
+		writeUVTag(t, d)
 	}
 	log := filepath.Join(t.TempDir(), "calls")
 	installFakeTool(t, "uv", fakeToolSpec{Default: fakeReply{Log: log}})
@@ -575,4 +591,165 @@ func TestPatternProviders_RelativePathsAreRejected(t *testing.T) {
 	_, err = NewProvider("proj", config.Provider{Enabled: true, Type: config.TypeProjectArtifacts, Paths: []string{"."}})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "must be absolute or start with ~/")
+}
+
+func TestUVProvider_RefusesNonEmptyDirThatIsNotAUVCache(t *testing.T) {
+	for name, setup := range map[string]func(t *testing.T, dir string){
+		"git checkouts": func(t *testing.T, dir string) {
+			t.Helper()
+			require.NoError(t, os.MkdirAll(filepath.Join(dir, "repo", ".git"), 0o700))
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "repo", "main.go"), []byte("package main\n"), 0o600))
+		},
+		"plain files": func(t *testing.T, dir string) {
+			t.Helper()
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("keep"), 0o600))
+		},
+		"wrong signature": func(t *testing.T, dir string) {
+			t.Helper()
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "CACHEDIR.TAG"), []byte("Signature: deadbeef\n"), 0o600))
+		},
+		"tag is a directory": func(t *testing.T, dir string) {
+			t.Helper()
+			require.NoError(t, os.MkdirAll(filepath.Join(dir, "CACHEDIR.TAG"), 0o700))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := filepath.Clean(t.TempDir())
+			setup(t, dir)
+			log := filepath.Join(t.TempDir(), "calls")
+			installFakeTool(t, "uv", fakeToolSpec{Default: fakeReply{Log: log}})
+			p := newUVProvider(t, config.Provider{Paths: []string{dir}})
+
+			for _, opts := range []CleanOptions{
+				{Mode: CleanModeFull}, {Mode: CleanModeSmart}, {Mode: CleanModeFull, DryRun: true},
+			} {
+				res, err := p.Clean(context.Background(), opts)
+				require.NoError(t, err)
+				assert.Contains(t, res.SkipReason, "not a uv cache")
+				assert.Contains(t, res.SkipReason, dir)
+				assert.Zero(t, res.BytesCleaned)
+			}
+			assert.Empty(t, logLines(t, log), "uv must not run in a directory it did not create")
+			entries, err := os.ReadDir(dir)
+			require.NoError(t, err)
+			assert.NotEmpty(t, entries)
+		})
+	}
+}
+
+func TestUVProvider_RunsInEmptyOrMissingDir(t *testing.T) {
+	for name, dir := range map[string]string{
+		"empty":   filepath.Clean(t.TempDir()),
+		"missing": filepath.Join(filepath.Clean(t.TempDir()), "not-yet"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			log := filepath.Join(t.TempDir(), "calls")
+			installFakeTool(t, "uv", fakeToolSpec{Default: fakeReply{Log: log}})
+			p := newUVProvider(t, config.Provider{Paths: []string{dir}})
+
+			res, err := p.Clean(context.Background(), CleanOptions{Mode: CleanModeSmart})
+
+			require.NoError(t, err)
+			assert.Empty(t, res.SkipReason)
+			assert.Len(t, logLines(t, log), 1)
+		})
+	}
+}
+
+func TestUVProvider_SkipsWhenAnotherBilgieRunHoldsTheLock(t *testing.T) {
+	dir, files := uvCache(t)
+	log := filepath.Join(t.TempDir(), "calls")
+	installFakeTool(t, "uv", fakeToolSpec{Default: fakeReply{Log: log}})
+	first := newUVProvider(t, config.Provider{Paths: []string{dir}})
+	second := newUVProvider(t, config.Provider{Paths: []string{dir}})
+	second.lockPath = first.lockPath
+
+	release, acquired, err := osshim.TryLock(first.lockPath)
+	require.NoError(t, err)
+	require.True(t, acquired)
+
+	res, err := second.Clean(context.Background(), CleanOptions{Mode: CleanModeFull})
+	require.NoError(t, err)
+	assert.Equal(t, "another bilgie run is cleaning uv", res.SkipReason)
+	assert.Empty(t, logLines(t, log))
+	requireAllExist(t, files)
+
+	dry, err := second.Clean(context.Background(), CleanOptions{Mode: CleanModeFull, DryRun: true})
+	require.NoError(t, err)
+	assert.Empty(t, dry.SkipReason, "a dry-run runs nothing, so it needs no lock")
+
+	release()
+	res, err = second.Clean(context.Background(), CleanOptions{Mode: CleanModeFull})
+	require.NoError(t, err)
+	assert.Empty(t, res.SkipReason)
+	assert.Len(t, logLines(t, log), 1)
+}
+
+func TestUVProvider_ReleasesItsLockAfterEachRun(t *testing.T) {
+	dir, _ := uvCache(t)
+	installFakeTool(t, "uv", fakeToolSpec{Default: fakeReply{Exit: 2, Stderr: "boom"}})
+	p := newUVProvider(t, config.Provider{Paths: []string{dir}})
+
+	for range 2 {
+		res, err := p.Clean(context.Background(), CleanOptions{Mode: CleanModeFull})
+		require.NoError(t, err)
+		assert.Contains(t, res.SkipReason, "failed", "a held lock would read as another run")
+	}
+	held, err := osshim.LockHeld(p.lockPath)
+	require.NoError(t, err)
+	assert.False(t, held)
+}
+
+func TestUVProvider_UnusableLockIsASkipWithReason(t *testing.T) {
+	dir, files := uvCache(t)
+	log := filepath.Join(t.TempDir(), "calls")
+	installFakeTool(t, "uv", fakeToolSpec{Default: fakeReply{Log: log}})
+	p := newUVProvider(t, config.Provider{Paths: []string{dir}})
+	p.lockPath = filepath.Join(t.TempDir(), "missing-dir", "uv.lock")
+
+	res, err := p.Clean(context.Background(), CleanOptions{Mode: CleanModeFull})
+
+	require.NoError(t, err)
+	assert.Contains(t, res.SkipReason, "cannot take the uv lock")
+	assert.Empty(t, logLines(t, log))
+	requireAllExist(t, files)
+}
+
+func TestUVProvider_FailureWithoutProgressStaysASkip(t *testing.T) {
+	dir, _ := uvCache(t)
+	installFakeTool(t, "uv", fakeToolSpec{Default: fakeReply{Exit: 2, Stderr: "error: nothing removed\n"}})
+	p := newUVProvider(t, config.Provider{Paths: []string{dir}})
+
+	res, err := p.Clean(context.Background(), CleanOptions{Mode: CleanModeSmart})
+
+	require.NoError(t, err)
+	assert.Contains(t, res.SkipReason, "nothing removed")
+}
+
+func TestStripVerbatimPrefix(t *testing.T) {
+	tests := map[string]string{
+		`\\?\C:\Users\me`:       `C:\Users\me`,
+		`\\?\c:\x`:              `c:\x`,
+		`\\?\UNC\host\share\x`:  `\\host\share\x`,
+		`\\?\unc\host\share`:    `\\host\share`,
+		`C:\Users\me`:           `C:\Users\me`,
+		`\\host\share`:          `\\host\share`,
+		`\\?\Volume{1234}\x`:    `\\?\Volume{1234}\x`,
+		`\\?\GLOBALROOT\Device`: `\\?\GLOBALROOT\Device`,
+		`/usr/local`:            `/usr/local`,
+		``:                      ``,
+	}
+	for in, want := range tests {
+		assert.Equal(t, want, stripVerbatimPrefix(in), in)
+	}
+}
+
+func TestPathWithin_VerbatimSpellingMatchesPlainRoot(t *testing.T) {
+	assert.True(t, pathWithin(`\\?\C:\Users\me`, `C:\Users\me`))
+	assert.True(t, pathWithin(`C:\Users\me`, `\\?\C:\Users\me`))
+	assert.False(t, pathWithin(`\\?\C:\Users\you`, `C:\Users\me`))
+	if runtime.GOOS == "windows" {
+		assert.True(t, pathWithin(`\\?\C:\Users\me\uv`, `C:\Users\me`))
+		assert.True(t, pathWithin(`\\?\UNC\host\share\x`, `\\host\share`))
+	}
 }

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/smykla-skalski/bilgie/internal/appname"
+	"github.com/smykla-skalski/bilgie/internal/config"
 	"github.com/smykla-skalski/bilgie/internal/osshim"
 )
 
@@ -20,11 +21,7 @@ const (
 // purpose: install-agent runs in a shell and the agent under launchd, and both
 // must find the same marker.
 func StateDir() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("get home dir: %w", err)
-	}
-	return filepath.Join(home, ".local", "state", stateDirName), nil
+	return config.StateDir()
 }
 
 // MarkFirstRunPending records that the next auto run must be a dry-run.

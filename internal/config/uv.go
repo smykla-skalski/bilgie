@@ -27,6 +27,11 @@ func ResolveUVCacheDir(paths []string) (string, error) {
 		return "", fmt.Errorf("expand paths: %w", err)
 	}
 	dir := filepath.Clean(expanded)
+	// ~\x and \x pass the portable check but name a directory below whatever
+	// directory bilgie runs in on Unix.
+	if !filepath.IsAbs(dir) {
+		return "", fmt.Errorf("path %q must be absolute or start with ~/", paths[0])
+	}
 	if !isDefaultUVDir(dir) {
 		if looksLikeGlob(dir) && !pathIsDir(dir) {
 			return "", fmt.Errorf("paths is a literal directory, not a glob pattern, and %q does not exist", dir)
@@ -91,10 +96,15 @@ func samePath(a, b string) bool {
 	return a == b
 }
 
-// ProviderPathsExist reports whether a provider has paths on disk. The uv
-// cache directory is resolved first, so UV_CACHE_DIR counts even when the
-// default directory is absent.
+// ProviderPathsExist reports whether a provider has paths on disk, or paths
+// that loading rejects. The uv cache directory is resolved first, so
+// UV_CACHE_DIR counts even when the default directory is absent.
 func ProviderPathsExist(name string, p Provider) bool {
+	// A relative path stays visible so loading reports it; whether such a
+	// directory exists depends on where bilgie runs.
+	if p.PathError() != nil {
+		return true
+	}
 	if name == uvProvider {
 		dir, err := ResolveUVCacheDir(p.Paths)
 		if err != nil {
@@ -114,4 +124,23 @@ func RequireAbsoluteOrTilde(path string) error {
 		return nil
 	}
 	return fmt.Errorf("path %q must be absolute or start with ~/", path)
+}
+
+// PathError reports the first path that is neither absolute nor home-relative
+// on this OS, or nil. Such a path would resolve against whatever
+// directory bilgie runs in.
+func (p Provider) PathError() error {
+	for _, path := range p.Paths {
+		if err := RequireAbsoluteOrTilde(path); err != nil {
+			return err
+		}
+		expanded, err := ExpandTilde(path)
+		if err != nil {
+			return fmt.Errorf("expand %q: %w", path, err)
+		}
+		if !IsAbsPortable(expanded) {
+			return fmt.Errorf("path %q must be absolute or start with ~/", path)
+		}
+	}
+	return nil
 }

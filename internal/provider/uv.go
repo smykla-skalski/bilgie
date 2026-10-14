@@ -2,7 +2,9 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/kballard/go-shellquote"
 	"github.com/smykla-skalski/bilgie/internal/config"
+	"github.com/smykla-skalski/bilgie/internal/osshim"
 	"github.com/smykla-skalski/bilgie/pkg/size"
 )
 
@@ -20,6 +23,7 @@ const (
 	uvBinary          = "uv"
 	uvDefaultCleanCmd = "uv cache clean"
 	uvSmartCleanCmd   = "uv cache prune"
+	uvLockName        = "uv.lock"
 )
 
 // UVProvider cleans the uv cache with uv itself. Files inside the cache
@@ -34,6 +38,9 @@ type UVProvider struct {
 	cleanCmd string
 	fullArgs []string
 	timeout  time.Duration
+
+	// lockPath is bilgie's own lock on running uv; empty uses the state dir.
+	lockPath string
 
 	mu        sync.Mutex
 	protected []string
@@ -127,6 +134,16 @@ func (p *UVProvider) Clean(ctx context.Context, opts CleanOptions) (CleanResult,
 	if reason := p.guardReason(); reason != "" {
 		return skipResult(reason), nil
 	}
+	if reason := p.rootReason(); reason != "" {
+		return skipResult(reason), nil
+	}
+	if !opts.DryRun {
+		release, reason := p.acquireLock()
+		if reason != "" {
+			return skipResult(reason), nil
+		}
+		defer release()
+	}
 	if skipped, ok := p.skipIfBusy(ctx); ok {
 		return skipped, nil
 	}
@@ -155,19 +172,68 @@ func (p *UVProvider) Clean(ctx context.Context, opts CleanOptions) (CleanResult,
 		if ctx.Err() != nil {
 			return CleanResult{Output: res.Output}, ctx.Err()
 		}
-		reason := fmt.Sprintf("%s failed: %v", display, err)
+		failure := fmt.Sprintf("%s failed: %v", display, err)
 		if line := firstLine(res.Output); line != "" {
-			reason += ": " + line
+			failure += ": " + line
 		}
-		skipped := skipResult(reason)
 		if res.BytesCleaned > 0 {
-			skipped.BytesCleaned = res.BytesCleaned
-			skipped.Output += fmt.Sprintf(" (uv freed %s before failing)", sizeText(res.BytesCleaned))
+			// uv removed entries before failing: the cache is half-cleaned, which
+			// a skip would hide.
+			return CleanResult{
+				Output:       fmt.Sprintf("%s (uv freed %s before failing)\n", failure, sizeText(res.BytesCleaned)),
+				BytesCleaned: res.BytesCleaned,
+			}, errors.New(failure)
 		}
-		return skipped, nil
+		return skipResult(failure), nil
 	}
 	return res, nil
 }
+
+// acquireLock takes bilgie's own lock on running uv, so two bilgie runs never
+// start uv together. uv's own cache lock does not cover the gap between the
+// busy check and uv taking it.
+func (p *UVProvider) acquireLock() (release func(), reason string) {
+	lock := p.lockPath
+	if lock == "" {
+		dir, err := config.StateDir()
+		if err == nil {
+			err = os.MkdirAll(dir, 0o750)
+		}
+		if err != nil {
+			return nil, "cannot take the uv lock: " + err.Error()
+		}
+		lock = filepath.Join(dir, uvLockName)
+	}
+	release, acquired, err := osshim.TryLock(lock)
+	switch {
+	case err != nil:
+		return nil, "cannot take the uv lock: " + err.Error()
+	case !acquired:
+		return nil, "another bilgie run is cleaning uv"
+	}
+	return release, ""
+}
+
+// rootReason refuses a non-empty directory that uv did not create: uv cache
+// clean empties whatever directory it is given, and a uv cache always holds a
+// CACHEDIR.TAG. A missing or empty directory has nothing to lose.
+func (p *UVProvider) rootReason() string {
+	entries, err := os.ReadDir(p.dir)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return ""
+	case err != nil:
+		return fmt.Sprintf("cannot verify %s is a uv cache: %v", p.dir, err)
+	case len(entries) == 0:
+		return ""
+	case !validCacheDirTag(filepath.Join(p.dir, "CACHEDIR.TAG")):
+		return "not a uv cache (no valid CACHEDIR.TAG): " + p.dir
+	}
+	return ""
+}
+
+// GuardsRoot implements RootGuarded.
+func (p *UVProvider) GuardsRoot() {}
 
 // childEnv pins uv to the directory bilgie measured and drops UV_NO_CACHE,
 // which would send uv to a throwaway directory.
@@ -204,7 +270,10 @@ func (p *UVProvider) guardReason() string {
 	return ""
 }
 
-var _ ProtectionAware = (*UVProvider)(nil)
+var (
+	_ ProtectionAware = (*UVProvider)(nil)
+	_ RootGuarded     = (*UVProvider)(nil)
+)
 
 // uvCommand ignores uv config files: a no-cache or cache-dir setting there
 // would send uv to a directory other than the one bilgie measured.
