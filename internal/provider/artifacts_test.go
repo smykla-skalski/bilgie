@@ -1443,3 +1443,39 @@ func TestProjectArtifacts_DirtyIgnoredStillHonorsOtherGuards(t *testing.T) {
 	assert.DirExists(t, h.path("api", "target"))
 	assert.Equal(t, 1, res.SkippedEntries)
 }
+
+func TestProjectArtifacts_IgnoredCheckStopsOnCancel(t *testing.T) {
+	for _, sub := range []string{"check-ignore", "ls-files"} {
+		t.Run(sub, func(t *testing.T) {
+			h := dirtyIgnoredHarness(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			inner := h.p.git
+			h.p.git = func(c context.Context, dir string, args ...string) (string, error) {
+				out, err := inner(c, dir, args...)
+				if args[0] == sub {
+					cancel()
+					return "", context.Canceled
+				}
+				return out, err
+			}
+			scan, err := h.p.scan(ctx)
+			require.NoError(t, err)
+			ps := h.p.newPass(ctx, scan)
+			cands := ps.candidates(ctx)
+			require.Len(t, cands, 1)
+
+			assert.Equal(t, "cancelled", ps.ignoredReason(ctx, cands[0]))
+		})
+	}
+}
+
+func TestProjectArtifacts_IgnoredCheckKeepsArtifactOutsideRepo(t *testing.T) {
+	h := dirtyIgnoredHarness(t)
+	scan, err := h.p.scan(context.Background())
+	require.NoError(t, err)
+	ps := h.p.newPass(context.Background(), scan)
+	c := ps.candidates(context.Background())[0]
+	c.proj.repoRoot = h.path("elsewhere", "repo")
+
+	assert.Equal(t, reasonDirty, ps.ignoredReason(context.Background(), c))
+}
