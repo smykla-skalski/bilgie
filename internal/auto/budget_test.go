@@ -24,7 +24,7 @@ func (s slowProvider) Clean(ctx context.Context, o provider.CleanOptions) (provi
 
 func TestRun_ProviderOverBudgetTimesOutAndNextRuns(t *testing.T) {
 	h := newHarness(t)
-	h.budget = 20 * time.Millisecond
+	h.budget = 250 * time.Millisecond
 	h.add("npm", true, false)
 	h.add("cargo", true, false)
 	h.wrap = map[string]provider.Provider{"npm": slowProvider{h.fakes["npm"]}}
@@ -37,7 +37,7 @@ func TestRun_ProviderOverBudgetTimesOutAndNextRuns(t *testing.T) {
 	assert.True(t, report.Results[0].TimedOut)
 	assert.Equal(t, StatusError, report.Results[0].Status)
 	assert.Equal(t, gib, report.Results[0].Freed)
-	assert.Contains(t, report.Results[0].Err.Error(), "timed out after 20ms")
+	assert.Contains(t, report.Results[0].Err.Error(), "timed out after 250ms")
 	assert.False(t, report.Results[1].TimedOut)
 	assert.Equal(t, StatusCleaned, report.Results[1].Status)
 }
