@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -18,16 +19,22 @@ type Loader struct {
 	skipDefaults bool   // skip merging with defaults (for test isolation)
 	platform     Platform
 	pathsExist   func([]string) bool
+	warn         io.Writer
 }
 
 // NewLoader creates a new config loader.
 func NewLoader() *Loader {
-	return &Loader{v: viper.New(), platform: CurrentPlatform(), pathsExist: PathsExist}
+	return &Loader{v: viper.New(), platform: CurrentPlatform(), pathsExist: PathsExist, warn: os.Stderr}
 }
 
 // SetPlatform overrides the OS and environment the defaults are built for.
 func (l *Loader) SetPlatform(p Platform) {
 	l.platform = p
+}
+
+// SetWarnWriter redirects load warnings (default stderr).
+func (l *Loader) SetWarnWriter(w io.Writer) {
+	l.warn = w
 }
 
 // SetConfigPath overrides config path (for testing).
@@ -123,9 +130,7 @@ func (l *Loader) Load() (*Config, error) {
 		if l.v.IsSet("providers." + name + ".clean_timeout") {
 			merged.CleanTimeout = userP.CleanTimeout
 		}
-		if l.v.IsSet("providers."+name+".paths") && !l.isForeignDefault(name, userP.Paths) {
-			merged.Paths = userP.Paths
-		}
+		l.mergePaths(&merged, name, userP.Paths)
 		if l.v.IsSet("providers." + name + ".enabled") {
 			merged.Enabled = userP.Enabled
 		}
@@ -154,6 +159,22 @@ func (l *Loader) Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// mergePaths applies the user's path list unless it is another OS's defaults.
+func (l *Loader) mergePaths(merged *Provider, name string, paths []string) {
+	if !l.v.IsSet("providers." + name + ".paths") {
+		return
+	}
+	goos := l.foreignDefaultOS(name, paths)
+	if goos == "" {
+		merged.Paths = paths
+		return
+	}
+	if goos != legacyOS {
+		fmt.Fprintf(l.warn, "warning: providers.%s.paths equals the %s defaults and none exists here; "+
+			"using the %s defaults (remove paths to silence this)\n", name, goos, l.platform.OS)
+	}
 }
 
 // mergeProjectArtifacts applies the user's project-artifacts settings over
@@ -309,24 +330,28 @@ func (l *Loader) Exists() (bool, error) {
 // defaults wrote into every saved config.
 var legacySailPaths = []string{"/private/tmp/sail*"}
 
-// isForeignDefault reports whether paths are the built-in paths of another
-// OS, as a config saved there and synced here holds. Paths that exist here
-// are kept: the user may have narrowed a provider on purpose. The current OS's own
-// defaults win then, so one config file works on every machine. The exact
+// legacyOS marks the pre-per-OS sail-dirs list, which is replaced silently.
+const legacyOS = "legacy"
+
+// foreignDefaultOS returns the OS whose built-in paths for the provider equal
+// paths, or "" when they are not another OS's defaults. A config saved there
+// and synced here holds them. Paths that exist here are kept: the user may
+// have narrowed a provider on purpose. Otherwise the current OS's own
+// defaults win, so one config file works on every machine. The exact
 // legacy sail-dirs list is always the default, as older releases wrote it
 // into every saved config; pin it by adding a second path.
-func (l *Loader) isForeignDefault(name string, paths []string) bool {
+func (l *Loader) foreignDefaultOS(name string, paths []string) string {
 	if name == "sail-dirs" {
 		if slices.Equal(paths, legacySailPaths) {
-			return true
+			return legacyOS
 		}
 		// Every other single entry is a deliberate pin, never a default.
 		if len(paths) == 1 {
-			return false
+			return ""
 		}
 	}
 	if l.pathsExist(paths) {
-		return false
+		return ""
 	}
 	for _, goos := range []string{OSDarwin, OSLinux, OSWindows} {
 		if goos == l.platform.OS {
@@ -347,11 +372,11 @@ func (l *Loader) isForeignDefault(name string, paths []string) bool {
 		}
 		for _, p := range candidates {
 			if def, ok := DefaultProvidersFor(p)[name]; ok && slices.Equal(def.Paths, paths) {
-				return true
+				return goos
 			}
 		}
 	}
-	return false
+	return ""
 }
 
 // portableProviders drops paths that equal this OS's built-in defaults, some
