@@ -457,6 +457,36 @@ func TestMise_TrimsDownloadsAndCacheByAgeNotInstalls(t *testing.T) {
 	assert.FileExists(t, oldPlugin)
 }
 
+func TestMise_DryRunDoesNotCountListedCacheTwice(t *testing.T) {
+	f := newMiseFixture(t)
+	cacheDir := filepath.Join(t.TempDir(), "mise")
+	listedCache := filepath.Join(cacheDir, "node", "20.0.0")
+	oldListed := filepath.Join(listedCache, "meta")
+	oldStray := filepath.Join(cacheDir, "node", "list.msgpack")
+	writeAged(t, oldListed, 200, 90*24*time.Hour)
+	writeAged(t, oldStray, 50, 90*24*time.Hour)
+	listing := "mise node@20.0.0 is prunable: node is not required\n" +
+		"mise node@20.0.0 [dryrun]   remove " + f.node + ", " + listedCache + "\n"
+	installFakeTool(t, "mise", fakeToolSpec{Replies: map[string]fakeReply{"prune --dry-run": {Stdout: listing}}})
+	p := newMise(t, f.root, config.Provider{})
+	p.paths = []string{f.root, cacheDir}
+
+	res, err := p.Clean(context.Background(), CleanOptions{Mode: CleanModeSmart, DryRun: true})
+
+	require.NoError(t, err)
+	assert.Contains(t, res.Output, "would prune: node@20.0.0 (")
+	assert.NotContains(t, res.Output, "would delete: "+oldListed)
+	assert.Contains(t, res.Output, "would delete: "+oldStray)
+	assert.Equal(t, int64(3000+200+50), res.BytesCleaned)
+	assert.Equal(t, int64(1), res.FilesDeleted)
+	var paths []string
+	for _, e := range res.Entries {
+		paths = append(paths, e.Path)
+	}
+	assert.NotContains(t, paths, oldListed)
+	assert.Contains(t, paths, oldStray)
+}
+
 func TestMise_CleanCmdValidation(t *testing.T) {
 	for _, cmd := range []string{"mise ls", "mise", "mise run prune", "mise exec node -- npm prune", "mise prune --dry-run", "mise prune --yes", "mise prune -ny", "mise prune -yn", "mise prune --dry-run=true", "mise prune -- node", "mise prune -Cstaging"} {
 		_, err := NewMiseProvider("mise", config.Provider{Paths: []string{t.TempDir()}, MaxSize: "1G", CleanCmd: cmd})

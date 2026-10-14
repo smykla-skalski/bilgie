@@ -655,11 +655,12 @@ from a deliberate choice, so set `enabled: false` to turn it off in an existing 
    Docker volumes, the `protected` list). `auto` does not run the git checkout scan on mise: the
    plugin clones under `plugins/` (`lua`, `make`, `teleport-ent`, ...) are real git checkouts, and
    they are never touched.
-2. Skips with a reason when `mise` is running or any process command line names a file below
-   `<mise dir>/installs/`, or the process list cannot be read. The check sees only what the process
-   list shows: a binary started by bare name from `PATH` (`node server.js`), or any binary on Windows
-   (image names only), is not visible to it. `mise prune` itself keeps the version a running process
-   started from, so mise is the backstop there.
+2. Skips with a reason when a `mise` process runs `install`, `upgrade`, `prune` or `use` (and their
+   aliases), or the process list cannot be read. Other mise processes (`mise dev`, `mise run`) and
+   processes started from `installs/` do not block the run: `mise prune` itself keeps the version a
+   running process started from. The check reads the first token of each command line, so
+   `sudo mise install`, `sh -c "mise ..."` and an executable path with spaces are not seen; on Windows
+   only image names are visible.
 3. Runs `mise prune --dry-run` and reads its report: `mise <tool>@<version> is prunable: ...` names the
    version, and `mise <tool>@<version> [dryrun] remove <installs>/<dir>/<version>, <cache>/<tool>/<version>`
    gives its directories (the installs directory name is a slug, `npm:@redocly/cli` is `npm-redocly-cli`).
@@ -675,7 +676,9 @@ from a deliberate choice, so set `enabled: false` to turn it off in an existing 
 `mise prune` removes only versions that no tracked config (`~/.local/state/mise/tracked-configs`)
 references. A version used only by an untracked project directory, by `MISE_<TOOL>_VERSION` or by
 `mise exec` may be removed; mise reinstalls it on demand. The real `mise prune --yes` removes what is
-unused at that moment, which can differ from the earlier listing if a config changed in between. `clean_cmd` defaults to `mise prune` and
+unused at that moment, which can differ from the earlier listing if a config changed in between.
+A dry-run counts a version's listed cache directories once, never again as age-trimmed files. Parallel
+`clean mise` runs are not serialized: each calls `prune --yes` and reports its own freed total. `clean_cmd` defaults to `mise prune` and
 must be `<mise executable> prune` optionally followed by tool names, with no flags (bilgie adds `--dry-run` and `--yes` itself); `clean_timeout` bounds each call.
 
 ### Busy tools
@@ -693,7 +696,7 @@ failure. If the check itself fails, the provider is skipped too.
 | `homebrew` | a `brew` process runs |
 | `yarn` | a `yarn` process runs (`yarn`, `yarn.js`, `yarnpkg`; any OS) |
 | `uv` | `<path>/.lock` is flock-held, or a `uv` process runs |
-| `mise` | a `mise` process runs, or a process command line names a file below `<path>/installs/` |
+| `mise` | a `mise` process runs `install`, `upgrade`, `prune` or `use` |
 
 Busy detection errs toward skipping: any process whose command line contains
 the tool name counts, including wrappers such as `sudo` or `sh -c`. The

@@ -152,6 +152,9 @@ func (p *MiseProvider) Clean(ctx context.Context, opts CleanOptions) (CleanResul
 		res.Output = strings.TrimSpace(out.String())
 		return res, err
 	}
+	if opts.DryRun {
+		trim = withoutListed(trim, list)
+	}
 	for _, f := range trim.Removed {
 		if opts.DryRun {
 			fmt.Fprintf(&out, "would delete: %s (%s)\n", f.Path, size.FormatSize(f.Size))
@@ -165,6 +168,30 @@ func (p *MiseProvider) Clean(ctx context.Context, opts CleanOptions) (CleanResul
 	res.Entries = append(res.Entries, entriesFromFiles(trim.Removed)...)
 	res.Output = strings.TrimSpace(out.String())
 	return res, nil
+}
+
+// withoutListed drops trim files that lie inside a directory the prune
+// listing already counts. A real run never sees them (prune removed them
+// first), so only a dry-run would count those bytes twice.
+func withoutListed(trim cache.TrimResult, list []prunable) cache.TrimResult {
+	var dirs []string
+	for _, v := range list {
+		dirs = append(dirs, v.path)
+		dirs = append(dirs, v.extra...)
+	}
+	kept := make([]cache.FileInfo, 0, len(trim.Removed))
+	for _, f := range trim.Removed {
+		if slices.ContainsFunc(dirs, func(d string) bool { return d != "" && pathWithin(f.Path, d) }) {
+			if !f.Shared {
+				trim.FreedBytes -= f.Size
+			}
+			trim.DeletedCount--
+			continue
+		}
+		kept = append(kept, f)
+	}
+	trim.Removed = kept
+	return trim
 }
 
 // account reports which listed versions are gone after a prune run. A
