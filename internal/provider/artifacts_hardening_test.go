@@ -932,3 +932,60 @@ func TestProjectArtifacts_EmptyUsableRootBesideRefusedIsNotSkipped(t *testing.T)
 	require.Len(t, res.Warnings, 1)
 	assert.Contains(t, res.Warnings[0], "root not scanned")
 }
+
+func TestLookupToolProcessesWith_FailureModes(t *testing.T) {
+	noCwds := func(context.Context, []int) (map[int]string, error) { return map[int]string{}, nil }
+	boom := errors.New("boom")
+
+	t.Run("table error fails closed", func(t *testing.T) {
+		table := func(context.Context) ([]osshim.Process, error) { return nil, boom }
+		_, err := lookupToolProcessesWith(context.Background(), table, noCwds)
+		require.ErrorIs(t, err, boom)
+	})
+	t.Run("no tool processes", func(t *testing.T) {
+		procs, err := lookupToolProcessesWith(context.Background(), osProcs(), noCwds)
+		require.NoError(t, err)
+		assert.Empty(t, procs)
+	})
+	t.Run("cwd lookup error marks every process unknown", func(t *testing.T) {
+		cwds := func(context.Context, []int) (map[int]string, error) { return nil, boom }
+		procs, err := lookupToolProcessesWith(context.Background(), osProcs(4242), cwds)
+		require.NoError(t, err)
+		require.Len(t, procs, 1)
+		assert.True(t, procs[0].CwdUnknown)
+	})
+	t.Run("second table error keeps the process", func(t *testing.T) {
+		reads := 0
+		table := func(ctx context.Context) ([]osshim.Process, error) {
+			reads++
+			if reads > 1 {
+				return nil, boom
+			}
+			return osProcs(4242)(ctx)
+		}
+		procs, err := lookupToolProcessesWith(context.Background(), table, noCwds)
+		require.NoError(t, err)
+		assert.Len(t, procs, 1)
+	})
+	t.Run("second cwd error keeps the process", func(t *testing.T) {
+		calls := 0
+		cwds := func(context.Context, []int) (map[int]string, error) {
+			calls++
+			if calls > 1 {
+				return nil, boom
+			}
+			return map[int]string{}, nil
+		}
+		procs, err := lookupToolProcessesWith(context.Background(), osProcs(4242), cwds)
+		require.NoError(t, err)
+		assert.Len(t, procs, 1)
+	})
+}
+
+func TestProcLabel(t *testing.T) {
+	assert.Empty(t, procLabel(toolProcess{CommandLine: "node x.js"}))
+	assert.Equal(t, " (pid 7)", procLabel(toolProcess{pid: 7}))
+	long := procLabel(toolProcess{pid: 7, CommandLine: "node " + strings.Repeat("a", 200)})
+	assert.True(t, strings.HasSuffix(long, "...)"))
+	assert.Less(t, len(long), 100)
+}
