@@ -95,32 +95,27 @@ func TestSortByRebuildCost_ProjectArtifactsAfterCaches(t *testing.T) {
 	assert.Equal(t, []string{"npm", "go-build", "xcode-deriveddata", "project-artifacts"}, names)
 }
 
-func TestRun_CriticalOptionFollowsTier(t *testing.T) {
+func TestRun_PassesPressureToProvider(t *testing.T) {
 	tests := []struct {
 		name string
 		free int64
-		want bool
+		want provider.Pressure
 	}{
-		{"low", 100 * gib, false},
-		{"critical", 8 * gib, true},
-		{"emergency", 1 * gib, true},
+		{"ok", 400 * gib, provider.PressureNone},
+		{"low", 100 * gib, provider.PressureNone},
+		{"critical", 8 * gib, provider.PressureCritical},
+		{"emergency", 2 * gib, provider.PressureEmergency},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			h := newHarness(t)
 			h.addAware("project-artifacts", true)
 
-			_, err := h.run(false, tt.free, tt.free, 400*gib)
+			_, err := h.run(true, tt.free)
 
 			require.NoError(t, err)
-			require.Len(t, h.opts, 1)
-			assert.Equal(t, tt.want, h.opts[0].Critical)
+			require.NotEmpty(t, h.opts)
+			assert.Equal(t, tt.want, h.opts[len(h.opts)-1].Pressure)
 		})
 	}
-
-	h := newHarness(t)
-	h.addAware("project-artifacts", true)
-	_, err := h.run(false, 400*gib)
-	require.NoError(t, err)
-	assert.False(t, h.opts[0].Critical)
 }

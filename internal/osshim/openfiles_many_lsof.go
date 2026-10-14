@@ -52,6 +52,11 @@ func OpenFilesUnder(ctx context.Context, dirs []string) (map[string]bool, error)
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
+	byDir := make(map[string][]string, len(resolved))
+	for i, dir := range resolved {
+		key := lsofKey(dir)
+		byDir[key] = append(byDir[key], live[i])
+	}
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
 	for scanner.Scan() {
@@ -59,11 +64,9 @@ func OpenFilesUnder(ctx context.Context, dirs []string) (map[string]bool, error)
 		if !ok {
 			continue
 		}
-		decoded := decodeLsofName(name)
-		for i, dir := range resolved {
-			if !open[live[i]] && (lsofUnder(name, dir) || lsofUnder(decoded, dir)) {
-				open[live[i]] = true
-			}
+		markOpenAncestors(open, byDir, name)
+		if decoded := decodeLsofName(name); decoded != name {
+			markOpenAncestors(open, byDir, decoded)
 		}
 	}
 	scanErr := scanner.Err()
@@ -83,13 +86,28 @@ func OpenFilesUnder(ctx context.Context, dirs []string) (map[string]bool, error)
 	return open, nil
 }
 
-// lsofUnder reports whether name is dir or lies inside it. lsof prints the
-// on-disk spelling, so macOS volumes compare without case.
-func lsofUnder(name, dir string) bool {
+// lsofKey is the form in which lsof names are compared to directories.
+func lsofKey(path string) string {
 	if runtime.GOOS == "darwin" {
-		name, dir = strings.ToLower(name), strings.ToLower(dir)
+		return strings.ToLower(path)
 	}
-	return underDir(name, dir)
+	return path
+}
+
+// markOpenAncestors marks every directory in byDir that name is, or lies
+// inside, by looking up name's ancestors: the cost per listed file is its
+// depth, not the number of directories.
+func markOpenAncestors(open map[string]bool, byDir map[string][]string, name string) {
+	for p := lsofKey(name); p != "" && p != "." && p != "/"; {
+		for _, dir := range byDir[p] {
+			open[dir] = true
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			break
+		}
+		p = parent
+	}
 }
 
 // decodeLsofName undoes lsof's escaping of unprintable bytes (\xHH, \n, ^X),

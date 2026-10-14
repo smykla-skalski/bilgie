@@ -1400,7 +1400,7 @@ func dirtyIgnoredHarness(t *testing.T) *artifactHarness {
 func TestProjectArtifacts_DirtyRepoIgnoredArtifactCleanedUnderPressure(t *testing.T) {
 	h := dirtyIgnoredHarness(t)
 
-	res := h.clean(CleanOptions{Mode: CleanModeFull, Critical: true})
+	res := h.clean(CleanOptions{Mode: CleanModeFull, Pressure: PressureCritical})
 
 	assert.NoDirExists(t, h.path("api", "target"))
 	require.Len(t, res.Entries, 1)
@@ -1410,7 +1410,7 @@ func TestProjectArtifacts_DirtyRepoIgnoredArtifactCleanedUnderPressure(t *testin
 func TestProjectArtifacts_DirtyRepoIgnoredArtifactMarkedInDryRun(t *testing.T) {
 	h := dirtyIgnoredHarness(t)
 
-	res := h.clean(CleanOptions{Mode: CleanModeFull, Critical: true, DryRun: true})
+	res := h.clean(CleanOptions{Mode: CleanModeFull, Pressure: PressureCritical, DryRun: true})
 
 	assert.DirExists(t, h.path("api", "target"))
 	assert.Contains(t, res.Output, "would remove")
@@ -1444,7 +1444,7 @@ func TestProjectArtifacts_DirtyRepoKeepsArtifactWhenNotSafelyIgnored(t *testing.
 			h := dirtyIgnoredHarness(t)
 			h.gitOut = tt.answers
 
-			res := h.clean(CleanOptions{Mode: CleanModeFull, Critical: true})
+			res := h.clean(CleanOptions{Mode: CleanModeFull, Pressure: PressureCritical})
 
 			assert.DirExists(t, h.path("api", "target"))
 			assert.Contains(t, res.Output, tt.reason)
@@ -1459,7 +1459,7 @@ func TestProjectArtifacts_DirtyIgnoredStillHonorsOtherGuards(t *testing.T) {
 		return []toolProcess{{Tool: "cargo", CommandLine: "cargo build", Cwd: h.path("api")}}, nil
 	}
 
-	res := h.clean(CleanOptions{Mode: CleanModeFull, Critical: true})
+	res := h.clean(CleanOptions{Mode: CleanModeFull, Pressure: PressureCritical})
 
 	assert.DirExists(t, h.path("api", "target"))
 	assert.Equal(t, 1, res.SkippedEntries)
@@ -1467,7 +1467,7 @@ func TestProjectArtifacts_DirtyIgnoredStillHonorsOtherGuards(t *testing.T) {
 	h = dirtyIgnoredHarness(t)
 	h.p.openCheck = func(context.Context, string) (bool, error) { return true, nil }
 
-	res = h.clean(CleanOptions{Mode: CleanModeFull, Critical: true})
+	res = h.clean(CleanOptions{Mode: CleanModeFull, Pressure: PressureCritical})
 
 	assert.DirExists(t, h.path("api", "target"))
 	assert.Equal(t, 1, res.SkippedEntries)
@@ -1509,4 +1509,69 @@ func TestProjectArtifacts_IgnoredCheckKeepsArtifactOutsideRepo(t *testing.T) {
 	c.proj.repoRoot = h.path("elsewhere", "repo")
 
 	assert.Equal(t, reasonDirty, ps.ignoredReason(context.Background(), c))
+}
+
+func TestProjectArtifacts_PressureShortensIdle(t *testing.T) {
+	off := false
+	tests := []struct {
+		name     string
+		mutate   func(*config.Provider)
+		pressure Pressure
+		idle     time.Duration
+		removed  bool
+		wantText string
+	}{
+		{"no pressure keeps min_idle", nil, PressureNone, 5 * day, false, "min_idle 30d"},
+		{"critical removes 3d idle", nil, PressureCritical, 3 * day, true, "min_idle 2d"},
+		{"critical keeps 36h idle", nil, PressureCritical, 36 * time.Hour, false, "min_idle 2d"},
+		{"emergency removes 2d idle", nil, PressureEmergency, 2 * day, true, "min_idle 1d"},
+		{"emergency keeps 12h idle", nil, PressureEmergency, 12 * time.Hour, false, "min_idle 1d"},
+		{"scaling off keeps min_idle", func(c *config.Provider) { c.TierScaling = &off }, PressureEmergency, 5 * day, false, "min_idle 30d"},
+		{"custom critical value", func(c *config.Provider) { c.CriticalMinIdle = "10d" }, PressureCritical, 11 * day, true, "min_idle 10d"},
+		{"never raises a shorter min_idle", func(c *config.Provider) { c.MinIdle = "12h" }, PressureEmergency, 18 * time.Hour, true, "min_idle 12h"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newArtifactHarness(t, tt.mutate)
+			rustProject(t, h.path("api"), 100, tt.idle)
+
+			res := h.clean(CleanOptions{Mode: CleanModeFull, DryRun: true, Pressure: tt.pressure})
+
+			assert.Contains(t, res.Output, tt.wantText)
+			if tt.removed {
+				require.Len(t, res.Entries, 1)
+				assert.Contains(t, res.Entries[0].Detail, tt.wantText)
+				return
+			}
+			assert.Empty(t, res.Entries)
+			assert.Contains(t, res.Output, "skip: ")
+		})
+	}
+}
+
+func TestProjectArtifacts_PressureKeepsSafetyChecks(t *testing.T) {
+	h := newArtifactHarness(t, nil)
+	rustProject(t, h.path("dirty"), 100, 5*day)
+	gitRepo(t, h.path("dirty"), 5*day)
+	h.dirty[h.path("dirty")] = true
+	rustProject(t, h.path("quiet"), 100, 5*day)
+	gitRepo(t, h.path("quiet"), 5*day)
+	h.gitOut["check-ignore"] = gitAnswer{err: errors.New("exit status 1")}
+
+	res := h.clean(CleanOptions{Mode: CleanModeFull, DryRun: true, Pressure: PressureEmergency})
+
+	assert.Equal(t, []string{h.path("quiet", "target")}, h.entryPaths(res))
+	assert.Contains(t, res.Output, "skip: "+h.path("dirty", "target"))
+}
+
+func TestProjectArtifacts_PressureConfigErrors(t *testing.T) {
+	for _, mutate := range []func(*config.Provider){
+		func(c *config.Provider) { c.CriticalMinIdle = "soon" },
+		func(c *config.Provider) { c.EmergencyMinIdle = "-1d" },
+	} {
+		cfg := config.Provider{Type: config.TypeProjectArtifacts, Paths: []string{t.TempDir()}, MaxSize: "1G"}
+		mutate(&cfg)
+		_, err := NewProjectArtifactsProvider("project-artifacts", cfg)
+		require.Error(t, err)
+	}
 }

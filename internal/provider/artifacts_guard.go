@@ -66,40 +66,109 @@ type processLookup func(ctx context.Context) ([]toolProcess, error)
 // lookupToolProcesses lists running build tools with their working
 // directories. Failing to list processes is an error, so callers fail closed.
 func lookupToolProcesses(ctx context.Context) ([]toolProcess, error) {
-	table, err := osshim.ProcessTable(ctx)
+	return lookupToolProcessesWith(ctx, osshim.ProcessTable, osshim.ProcessCwds)
+}
+
+// lookupToolProcessesWith reads the table and the working directories through
+// the given readers. A process whose directory is missing from the first read
+// is looked up once more: it may have exited, which drops it, or its
+// directory may have become readable.
+func lookupToolProcessesWith(
+	ctx context.Context,
+	table func(context.Context) ([]osshim.Process, error),
+	cwdsOf func(context.Context, []int) (map[int]string, error),
+) ([]toolProcess, error) {
+	rows, err := table(ctx)
 	if err != nil {
 		return nil, err
 	}
-	self := os.Getpid()
-	var procs []toolProcess
-	var pids []int
-	for i := range table {
-		if table[i].PID == self {
-			continue
-		}
-		if tool := matchAnyKind(table[i].CommandLine); tool != "" {
-			procs = append(procs, toolProcess{Tool: tool, pid: table[i].PID, CommandLine: table[i].CommandLine})
-			pids = append(pids, table[i].PID)
-		}
-	}
+	procs := matchToolProcesses(rows)
 	if len(procs) == 0 {
 		return nil, nil
 	}
-	cwds, err := osshim.ProcessCwds(ctx, pids)
-	for i := range procs {
-		switch {
-		case err != nil:
+	cwds, err := cwdsOf(ctx, pidsOf(procs))
+	if err != nil {
+		for i := range procs {
 			procs[i].CwdUnknown = true
-		default:
-			procs[i].Cwd = cwds[procs[i].pid]
+		}
+		return procs, nil
+	}
+	for i := range procs {
+		procs[i].Cwd = cwds[procs[i].pid]
+	}
+	if !slices.ContainsFunc(procs, func(p toolProcess) bool { return p.Cwd == "" }) {
+		return procs, nil
+	}
+	return retryUnreadable(ctx, procs, table, cwdsOf), nil
+}
+
+func matchToolProcesses(rows []osshim.Process) []toolProcess {
+	self := os.Getpid()
+	var procs []toolProcess
+	for i := range rows {
+		if rows[i].PID == self {
+			continue
+		}
+		if tool := matchAnyKind(rows[i].CommandLine); tool != "" {
+			procs = append(procs, toolProcess{Tool: tool, pid: rows[i].PID, CommandLine: rows[i].CommandLine})
 		}
 	}
-	return procs, nil
+	return procs
+}
+
+func pidsOf(procs []toolProcess) []int {
+	pids := make([]int, len(procs))
+	for i := range procs {
+		pids[i] = procs[i].pid
+	}
+	return pids
+}
+
+// retryUnreadable reads the directories that failed once more. A failed
+// second read keeps the process blocking; one that left the table is dropped.
+func retryUnreadable(
+	ctx context.Context,
+	procs []toolProcess,
+	table func(context.Context) ([]osshim.Process, error),
+	cwdsOf func(context.Context, []int) (map[int]string, error),
+) []toolProcess {
+	rows, err := table(ctx)
+	if err != nil {
+		return procs
+	}
+	alive := make(map[int]bool, len(rows))
+	for i := range rows {
+		alive[rows[i].PID] = true
+	}
+	var pending []int
+	for i := range procs {
+		if procs[i].Cwd == "" && alive[procs[i].pid] {
+			pending = append(pending, procs[i].pid)
+		}
+	}
+	var cwds map[int]string
+	if len(pending) > 0 {
+		if cwds, err = cwdsOf(ctx, pending); err != nil {
+			return procs
+		}
+	}
+	kept := procs[:0]
+	for _, proc := range procs {
+		if proc.Cwd == "" {
+			if !alive[proc.pid] {
+				continue
+			}
+			proc.Cwd = cwds[proc.pid]
+		}
+		kept = append(kept, proc)
+	}
+	return kept
 }
 
 // measureActivity fills in when the project was last touched: the newest
 // mtime outside .git and the artifact directories (a bounded sample), and the
-// git HEAD and reflog time. Anything unreadable becomes the project's
+// git HEAD and reflog time. A project over the sample limit is judged from git
+// alone when it is in a repository, and skipped otherwise. Anything unreadable becomes the project's
 // problem, which skips it.
 func (p *ProjectArtifactsProvider) measureActivity(ctx context.Context, proj *project) {
 	if proj.measured || ctx.Err() != nil {
@@ -117,10 +186,6 @@ func (p *ProjectArtifactsProvider) measureActivity(ctx context.Context, proj *pr
 	}
 	proj.sampled = newest
 	proj.newest = newest
-	if truncated {
-		proj.problem = "too many files to judge idleness"
-		return
-	}
 
 	repoRoot, gitDir, err := findGit(proj.Dir, proj.root, homeSpellings(p.home))
 	if err != nil {
@@ -129,6 +194,10 @@ func (p *ProjectArtifactsProvider) measureActivity(ctx context.Context, proj *pr
 	}
 	proj.repoRoot = repoRoot
 	if gitDir == "" {
+		// Without git there is no signal beyond the sample.
+		if truncated {
+			proj.problem = "too many files to judge idleness"
+		}
 		return
 	}
 	gitTime, err := gitActivity(gitDir)
@@ -283,7 +352,8 @@ func lastReflogTime(path string) (time.Time, bool) {
 
 // busyReason skips an artifact whose project has a running build tool of the
 // artifact's kind: one whose command line names the project, or whose
-// working directory is inside it (or in the enclosing repository, above it).
+// working directory is inside it (or in the enclosing repository, above it),
+// or above it inside the scan root with no path argument pointing elsewhere.
 // A matched process whose directory cannot be read counts as busy.
 func (ps *pass) busyReason(c *candidate) string {
 	if ps.procsErr != nil {
@@ -310,16 +380,25 @@ func (ps *pass) busyReason(c *candidate) string {
 			return tool + " is running on the project"
 		case proj.repoRoot != "" && pathWithin(proc.Cwd, proj.repoRoot) && pathWithin(proj.Dir, proc.Cwd):
 			return tool + " is running in the repository"
+		case holdsFromAbove(proc, proj):
+			return tool + " is running above the project"
 		}
 	}
 	return ""
 }
 
 func procLabel(proc toolProcess) string {
-	if proc.pid > 0 {
+	if proc.pid <= 0 {
+		return ""
+	}
+	cmd := strings.Join(strings.Fields(proc.CommandLine), " ")
+	if r := []rune(cmd); len(r) > 80 {
+		cmd = string(r[:77]) + "..."
+	}
+	if cmd == "" {
 		return fmt.Sprintf(" (pid %d)", proc.pid)
 	}
-	return ""
+	return fmt.Sprintf(" (pid %d, %s)", proc.pid, cmd)
 }
 
 // pathFlags are the options whose value is a project path.
@@ -344,9 +423,34 @@ func argsReach(proc toolProcess, dirs ...string) bool {
 }
 
 func fieldsReach(fields []string, cwd string, dirs []string) bool {
+	for _, spellings := range argPaths(fields, cwd, false) {
+		for _, spelling := range spellings {
+			for _, dir := range dirs {
+				if dir != "" && pathWithin(spelling, dir) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// valueOfOtherFlag reports whether prev is an option that takes a value and
+// does not select a project, so the next token is not a path to one.
+func valueOfOtherFlag(prev string) bool {
+	prev = strings.Trim(prev, `"';&|()`)
+	return strings.HasPrefix(prev, "-") && !strings.Contains(prev, "=") && !slices.Contains(pathFlags, prev)
+}
+
+// argPaths returns, for each path-like argument, its spellings resolved
+// against cwd: lexical and, when it exists, symlink-resolved. Strict mode
+// drops bare words and values of options that do not select a project.
+func argPaths(fields []string, cwd string, strict bool) [][]string {
+	var out [][]string
 	for i, field := range fields {
 		tok := strings.Trim(field, `"';&|()`)
-		if strings.HasPrefix(tok, "-") {
+		switch {
+		case strings.HasPrefix(tok, "-"):
 			flag, value, hasValue := strings.Cut(tok, "=")
 			if !slices.Contains(pathFlags, flag) {
 				continue
@@ -358,7 +462,9 @@ func fieldsReach(fields []string, cwd string, dirs []string) bool {
 				value = strings.Trim(fields[i+1], `"';&|()`)
 			}
 			tok = value
-		} else if !strings.ContainsAny(tok, `/\`) && !strings.HasPrefix(tok, ".") && !existsBelow(cwd, tok) {
+		case !strings.ContainsAny(tok, `/\`) && !strings.HasPrefix(tok, ".") && (strict || !existsBelow(cwd, tok)):
+			continue
+		case strict && i > 0 && valueOfOtherFlag(fields[i-1]):
 			continue
 		}
 		if tok == "" {
@@ -372,15 +478,40 @@ func fieldsReach(fields []string, cwd string, dirs []string) bool {
 		if resolved, err := filepath.EvalSymlinks(abs); err == nil && resolved != abs {
 			spellings = append(spellings, resolved)
 		}
-		for _, spelling := range spellings {
-			for _, dir := range dirs {
-				if dir != "" && pathWithin(spelling, dir) {
-					return true
-				}
+		out = append(out, spellings)
+	}
+	return out
+}
+
+// holdsFromAbove reports whether a build tool run from a directory above the
+// project, inside the scan root, holds it: `cd ~/code && cargo build` builds
+// whatever manifest sits below. A project selector or script path that
+// resolves inside the scan root but outside the project means the tool works
+// elsewhere, so it holds only that target. Paths outside the scan root, such
+// as a launcher script or a target dir, say nothing about the project.
+func holdsFromAbove(proc toolProcess, proj *project) bool {
+	if proc.Cwd == "" || proj.root == "" || proc.Cwd == proj.Dir ||
+		!pathWithin(proj.Dir, proc.Cwd) || !pathWithin(proc.Cwd, proj.root) {
+		return false
+	}
+	for _, fields := range [][]string{splitQuoted(proc.CommandLine), strings.Fields(proc.CommandLine)} {
+		for _, spellings := range argPaths(fields, proc.Cwd, true) {
+			if isToolPath(spellings[0]) || !pathWithin(spellings[0], proj.root) {
+				continue
+			}
+			if !slices.ContainsFunc(spellings, func(sp string) bool { return pathWithin(sp, proj.Dir) }) {
+				return false
 			}
 		}
 	}
-	return false
+	return true
+}
+
+// isToolPath reports whether path is a build tool executable, such as the
+// /usr/bin/node that starts the command line.
+func isToolPath(path string) bool {
+	base := strings.TrimSuffix(strings.ToLower(filepath.Base(path)), ".exe")
+	return matchAnyKind(base) != ""
 }
 
 // namesRelative reports whether the command line spells the project's path
