@@ -19,7 +19,7 @@ import (
 
 // Project artifact defaults.
 const (
-	defaultArtifactMinIdle    = 60 * 24 * time.Hour
+	defaultArtifactMinIdle    = 7 * 24 * time.Hour
 	defaultArtifactBudget     = 10 * time.Second
 	defaultArtifactPassBudget = 30 * time.Second
 	openSnapshotTTL           = 2 * time.Second

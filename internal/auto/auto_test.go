@@ -982,3 +982,20 @@ func TestRun_VerbosePrintsEveryResultLikeBefore(t *testing.T) {
 	assert.Contains(t, h.out.String(), "npm: freed 1.0 GiB")
 	assert.NotContains(t, h.out.String(), "total:")
 }
+
+func TestLoadErrors_SkipsProvidersAutoNeverRuns(t *testing.T) {
+	h := newHarness(t)
+	h.add("renamed-prune", true, true, func(_ *fakeProvider, pc *config.Provider) {
+		pc.CleanCmd = "docker volume prune -f"
+	})
+	h.add("docker-volumes", true, true)
+	h.add("broken", true, true)
+
+	failing := func(name string, _ config.Provider) (provider.Provider, error) {
+		return nil, errors.New("load " + name)
+	}
+	errs := LoadErrors(h.cfg, failing)
+
+	require.Len(t, errs, 1)
+	assert.EqualError(t, errs[0], "load broken")
+}

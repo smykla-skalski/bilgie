@@ -1043,7 +1043,7 @@ func TestProjectArtifacts_Defaults(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	assert.Equal(t, 60*day, p.minIdle)
+	assert.Equal(t, 7*day, p.minIdle)
 	assert.Equal(t, 10*time.Second, p.budget)
 	assert.Equal(t, 4, p.maxDepth)
 	assert.True(t, p.skipDirty)
@@ -1345,4 +1345,33 @@ func TestNewProjectArtifactsProvider_AcceptsMillisecondBudgets(t *testing.T) {
 		Paths: []string{t.TempDir()}, MaxSize: "1G", MinIdle: "10ms",
 	})
 	require.Error(t, err)
+}
+
+func TestProjectArtifacts_DefaultIdleThreshold(t *testing.T) {
+	tests := []struct {
+		name    string
+		minIdle string
+		removed []string
+		kept    []string
+	}{
+		{"default 7d", "", []string{"old"}, []string{"recent"}},
+		{"explicit value wins", "30d", nil, []string{"old", "recent"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			minIdle := tt.minIdle
+			h := newArtifactHarness(t, func(c *config.Provider) { c.MinIdle = minIdle })
+			rustProject(t, h.path("old"), 100, 10*day)
+			rustProject(t, h.path("recent"), 100, 3*day)
+
+			h.clean(CleanOptions{Mode: CleanModeFull})
+
+			for _, n := range tt.removed {
+				assert.NoDirExists(t, h.path(n, "target"))
+			}
+			for _, n := range tt.kept {
+				assert.DirExists(t, h.path(n, "target"))
+			}
+		})
+	}
 }
