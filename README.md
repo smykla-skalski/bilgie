@@ -691,7 +691,7 @@ failure. If the check itself fails, the provider is skipped too.
 | Provider | Skipped while |
 |----------|---------------|
 | `go-build`, `go-mod` | a `go` process runs |
-| `cargo` | a `cargo` or `rustc` process runs |
+| `cargo` | `<cargo home>/.package-cache` or `.package-cache-mutate` is flock-held (a running build does not block) |
 | `gradle` | a `gradle` or `gradlew` process, or a Gradle daemon, runs |
 | `homebrew` | a `brew` process runs |
 | `yarn` | a `yarn` process runs (`yarn`, `yarn.js`, `yarnpkg`; any OS) |
@@ -699,7 +699,9 @@ failure. If the check itself fails, the provider is skipped too.
 | `mise` | a `mise` process runs `install`, `upgrade`, `prune` or `use` |
 
 Busy detection errs toward skipping: any process whose command line contains
-the tool name counts, including wrappers such as `sudo` or `sh -c`. The
+the tool name counts, including wrappers such as `sudo` or `sh -c` (`mise` and `cargo`
+are the exceptions: `mise` matches only the first token of mutating commands, see [mise](#mise),
+and `cargo` looks only at its registry locks). The
 bilgie process and its wrapper ancestors are not counted: a wrapper is
 recognized by parsing its command string with shell quoting rules (quotes,
 backslash escapes, repeated spaces, nested `sh -c`, `env VAR=x`, `sudo`) and
@@ -707,7 +709,7 @@ finding bilgie's own executable and arguments in it. A string that does not
 parse falls back to its whitespace-separated words and must still show bilgie's
 executable followed by its arguments, or it stays busy. Shell separators glued to a word
 (`echo hi;bilgie clean cargo`) are split. An ancestor that is the tool itself, such as
-`cargo run -- clean cargo`, is counted. A hung
+`uv run -- bilgie clean uv`, is counted. A hung
 `clean_cmd` is killed with its whole process group, so it must not need a
 terminal.
 

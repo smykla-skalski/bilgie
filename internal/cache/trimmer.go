@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -17,6 +18,9 @@ type TrimOptions struct {
 	MaxSize int64         // Target size (10% buffer applied internally)
 	MaxAge  time.Duration // Delete files older than this
 	DryRun  bool
+	// Exclude drops matching files before planning, so they neither count
+	// toward MaxSize nor get deleted.
+	Exclude func(path string) bool
 }
 
 // TrimResult contains trimming operation results.
@@ -116,6 +120,9 @@ func Trim(ctx context.Context, paths []string, opts TrimOptions) (TrimResult, er
 	}
 
 	files := listResult.Files
+	if opts.Exclude != nil {
+		files = slices.DeleteFunc(files, func(f FileInfo) bool { return opts.Exclude(f.Path) })
+	}
 	if len(files) == 0 {
 		return TrimResult{Output: "no files found", Errors: listResult.Warnings}, nil
 	}

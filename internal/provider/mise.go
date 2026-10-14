@@ -147,13 +147,10 @@ func (p *MiseProvider) Clean(ctx context.Context, opts CleanOptions) (CleanResul
 		out.WriteString("no unused tool versions\n")
 	}
 
-	trim, err := p.trimFiles(ctx, opts.DryRun)
+	trim, err := p.trimFiles(ctx, opts.DryRun, list)
 	if err != nil {
 		res.Output = strings.TrimSpace(out.String())
 		return res, err
-	}
-	if opts.DryRun {
-		trim = withoutListed(trim, list)
 	}
 	for _, f := range trim.Removed {
 		if opts.DryRun {
@@ -168,30 +165,6 @@ func (p *MiseProvider) Clean(ctx context.Context, opts CleanOptions) (CleanResul
 	res.Entries = append(res.Entries, entriesFromFiles(trim.Removed)...)
 	res.Output = strings.TrimSpace(out.String())
 	return res, nil
-}
-
-// withoutListed drops trim files that lie inside a directory the prune
-// listing already counts. A real run never sees them (prune removed them
-// first), so only a dry-run would count those bytes twice.
-func withoutListed(trim cache.TrimResult, list []prunable) cache.TrimResult {
-	var dirs []string
-	for _, v := range list {
-		dirs = append(dirs, v.path)
-		dirs = append(dirs, v.extra...)
-	}
-	kept := make([]cache.FileInfo, 0, len(trim.Removed))
-	for _, f := range trim.Removed {
-		if slices.ContainsFunc(dirs, func(d string) bool { return d != "" && pathWithin(f.Path, d) }) {
-			if !f.Shared {
-				trim.FreedBytes -= f.Size
-			}
-			trim.DeletedCount--
-			continue
-		}
-		kept = append(kept, f)
-	}
-	trim.Removed = kept
-	return trim
 }
 
 // account reports which listed versions are gone after a prune run. A
@@ -595,7 +568,10 @@ func (p *MiseProvider) trimDirs() []string {
 	return dirs
 }
 
-func (p *MiseProvider) trimFiles(ctx context.Context, dryRun bool) (cache.TrimResult, error) {
+// trimFiles ages out downloads and cache files. A dry-run leaves out the
+// directories the prune listing already counts: a real run finds them gone,
+// so counting them again would over-report and skew the size budget.
+func (p *MiseProvider) trimFiles(ctx context.Context, dryRun bool, list []prunable) (cache.TrimResult, error) {
 	var existing []string
 	for _, d := range p.trimDirs() {
 		if info, err := os.Lstat(d); err == nil && info.IsDir() {
@@ -605,7 +581,18 @@ func (p *MiseProvider) trimFiles(ctx context.Context, dryRun bool) (cache.TrimRe
 	if len(existing) == 0 {
 		return cache.TrimResult{}, nil
 	}
-	return cache.Trim(ctx, existing, cache.TrimOptions{MaxSize: p.maxSize, MaxAge: p.maxAge, DryRun: dryRun})
+	opts := cache.TrimOptions{MaxSize: p.maxSize, MaxAge: p.maxAge, DryRun: dryRun}
+	if dryRun {
+		var listed []string
+		for _, v := range list {
+			listed = append(listed, v.path)
+			listed = append(listed, v.extra...)
+		}
+		opts.Exclude = func(path string) bool {
+			return slices.ContainsFunc(listed, func(d string) bool { return d != "" && pathWithin(path, d) })
+		}
+	}
+	return cache.Trim(ctx, existing, opts)
 }
 
 var _ ProtectionAware = (*MiseProvider)(nil)
