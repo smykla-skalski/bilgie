@@ -73,10 +73,11 @@ type cleanResultMsg struct {
 
 // InteractiveCmd launches interactive TUI mode.
 var InteractiveCmd = &cobra.Command{
-	Use:     "interactive",
-	Aliases: []string{"i"},
-	Short:   "Interactive cache management mode",
-	RunE:    runInteractive,
+	Use:          "interactive",
+	Aliases:      []string{"i"},
+	Short:        "Interactive cache management mode",
+	RunE:         runInteractive,
+	SilenceUsage: true,
 }
 
 func init() {

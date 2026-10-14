@@ -53,3 +53,44 @@ func TestCheckRegular(t *testing.T) {
 	assert.NoError(t, CheckRegular(filepath.Join(dir, "missing")))
 	assert.ErrorIs(t, CheckRegular(dir), ErrNotRegular)
 }
+
+func TestWriteFileNoLink_ReplacesContentAndCreates(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state")
+
+	require.NoError(t, WriteFileNoLink(path, []byte("a long first line\n"), 0o600))
+	require.NoError(t, WriteFileNoLink(path, []byte("short"), 0o600))
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, "short", string(data))
+}
+
+func TestOpenAppendNoLink_AppendsAfterExistingContent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "log")
+	require.NoError(t, os.WriteFile(path, []byte("one\n"), 0o600))
+
+	f, err := OpenAppendNoLink(path, 0o600)
+	require.NoError(t, err)
+	_, err = f.WriteString("two\n")
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, "one\ntwo\n", string(data))
+}
+
+func TestOpenRegular(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "f")
+	require.NoError(t, os.WriteFile(file, []byte("abc"), 0o600))
+
+	f, err := OpenRegular(file)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	_, err = OpenRegular(dir)
+	require.ErrorIs(t, err, ErrNotRegular)
+	_, err = OpenRegular(filepath.Join(dir, "missing"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+}

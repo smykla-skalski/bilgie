@@ -108,6 +108,29 @@ func (a Agent) logPath() string {
 	return filepath.Join(a.StateDir, "auto.log")
 }
 
+// makeLogDir creates the launchd log directory. A link at the directory
+// itself is refused: the log would land wherever the link points.
+func (a Agent) makeLogDir() error {
+	dir := filepath.Dir(a.logPath())
+	if info, err := os.Lstat(dir); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("log dir %s is a symbolic link; remove it and run install-agent again", dir)
+	}
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return fmt.Errorf("create log dir: %w", err)
+	}
+	return nil
+}
+
+// LinkedPaths lists the state files and the launchd log directory that are
+// symbolic links. Bilgie refuses to write through them.
+func (a Agent) LinkedPaths() []string {
+	out := LinkedState(a.StateDir)
+	if a.goos() == goosDarwin {
+		out = append(out, linked(filepath.Dir(a.logPath()))...)
+	}
+	return out
+}
+
 // Install arms the first-run dry-run marker, then registers the job with the
 // scheduler of the agent's OS.
 func (a Agent) Install(ctx context.Context) error {
