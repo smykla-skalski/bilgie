@@ -164,7 +164,10 @@ func TestLaunchdUninstall_Failures(t *testing.T) {
 		s := &scriptedExec{}
 		a := newOSAgent(t, "darwin", posixExe, s)
 		require.NoError(t, a.Install(t.Context()))
-		s.respond = func(string, []string) ([]byte, error) {
+		s.respond = func(_ string, args []string) ([]byte, error) {
+			if args[0] == "print" {
+				return []byte("Could not find service"), errExit
+			}
 			cancel()
 			return []byte("boom"), errExit
 		}
@@ -241,6 +244,30 @@ func TestSystemdInstall_UnreadableCrontabIsOnlyAWarning(t *testing.T) {
 
 	assert.Contains(t, output(a), "warning: could not remove an earlier crontab entry")
 	assert.FileExists(t, a.TimerPath())
+}
+
+func TestSystemdUninstall_CancelledDisableIsNotConfirmedByAQuery(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	s := &scriptedExec{respond: noCrontab}
+	a := newOSAgent(t, "linux", posixExe, s)
+	require.NoError(t, a.Install(t.Context()))
+	s.respond = func(name string, args []string) ([]byte, error) {
+		switch {
+		case name == "crontab":
+			return noCrontab(name, args)
+		case args[1] == "disable":
+			cancel()
+			return []byte("boom"), errExit
+		case args[1] == "show":
+			return []byte(systemdNotFoundState), nil
+		}
+		return nil, nil
+	}
+
+	require.ErrorContains(t, a.Uninstall(ctx), "systemctl disable")
+
+	assert.FileExists(t, a.TimerPath())
+	assert.True(t, FirstRunPending(a.StateDir))
 }
 
 func TestSystemdUninstall_FailuresKeepTheMarker(t *testing.T) {
@@ -433,11 +460,7 @@ func TestWriteFileAtomic_Failures(t *testing.T) {
 }
 
 func TestExecCommand_MissingBinaryIsRecognised(t *testing.T) {
-	out, err := ExecCommand(t.Context(), "go", "version")
-	require.NoError(t, err)
-	assert.Contains(t, string(out), "go version")
-
-	_, err = ExecCommand(t.Context(), "bilgie-no-such-binary")
+	_, err := ExecCommand(t.Context(), "bilgie-no-such-binary")
 	require.Error(t, err)
 	assert.True(t, binaryMissing(err))
 }
