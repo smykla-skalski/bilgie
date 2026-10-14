@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/smykla-skalski/bilgie/internal/config"
+	"github.com/smykla-skalski/bilgie/internal/osshim"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -167,7 +168,38 @@ func TestProjectArtifacts_RelativePathProcessesBlockRemoval(t *testing.T) {
 	}
 }
 
-func TestProjectArtifacts_TruncatedSampleFailsClosedInGitRepos(t *testing.T) {
+func TestProjectArtifacts_OversizedGitProjectIsJudgedFromGit(t *testing.T) {
+	tests := []struct {
+		name    string
+		idle    time.Duration
+		removed bool
+	}{
+		{"idle git activity", 90 * day, true},
+		{"recent git activity", day, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newArtifactHarness(t, nil)
+			rustProject(t, h.path("api"), 100, 90*day)
+			for i := range sampleLimit + 5 {
+				writeFile(t, h.path("api", "docs", fmt.Sprintf("f%05d.md", i)), "x")
+			}
+			ageTree(t, h.path("api", "docs"), 90*day)
+			gitRepo(t, h.path("api"), tt.idle)
+
+			res := h.clean(CleanOptions{Mode: CleanModeFull})
+
+			assert.NotContains(t, res.Output, "too many files")
+			if tt.removed {
+				assert.NoDirExists(t, h.path("api", "target"))
+			} else {
+				assert.DirExists(t, h.path("api", "target"))
+			}
+		})
+	}
+}
+
+func TestProjectArtifacts_OversizedGitProjectStillHonoursDirtyTree(t *testing.T) {
 	h := newArtifactHarness(t, nil)
 	rustProject(t, h.path("api"), 100, 90*day)
 	for i := range sampleLimit + 5 {
@@ -175,11 +207,75 @@ func TestProjectArtifacts_TruncatedSampleFailsClosedInGitRepos(t *testing.T) {
 	}
 	ageTree(t, h.path("api", "docs"), 90*day)
 	gitRepo(t, h.path("api"), 90*day)
+	h.p.git = func(context.Context, string, ...string) (string, error) { return " M main.rs\n", nil }
 
 	res := h.clean(CleanOptions{Mode: CleanModeFull})
 
 	assert.DirExists(t, h.path("api", "target"))
-	assert.Contains(t, res.Output, "too many files")
+	assert.Contains(t, res.Output, "uncommitted changes")
+}
+
+func osProcs(pids ...int) func(context.Context) ([]osshim.Process, error) {
+	return func(context.Context) ([]osshim.Process, error) {
+		rows := make([]osshim.Process, len(pids))
+		for i, pid := range pids {
+			rows[i] = osshim.Process{PID: pid, CommandLine: "node server.js"}
+		}
+		return rows, nil
+	}
+}
+
+func TestLookupToolProcessesWith_RetriesUnreadableDirectories(t *testing.T) {
+	t.Run("readable on the second read", func(t *testing.T) {
+		calls := 0
+		cwds := func(_ context.Context, pids []int) (map[int]string, error) {
+			calls++
+			if calls == 1 {
+				return map[int]string{}, nil
+			}
+			return map[int]string{pids[0]: "/work"}, nil
+		}
+		procs, err := lookupToolProcessesWith(context.Background(), osProcs(4242), cwds)
+		require.NoError(t, err)
+		require.Len(t, procs, 1)
+		assert.Equal(t, "/work", procs[0].Cwd)
+		assert.Equal(t, 2, calls)
+	})
+	t.Run("exited before the second read", func(t *testing.T) {
+		reads := 0
+		table := func(ctx context.Context) ([]osshim.Process, error) {
+			reads++
+			if reads == 1 {
+				return osProcs(4242)(ctx)
+			}
+			return nil, nil
+		}
+		cwds := func(context.Context, []int) (map[int]string, error) { return map[int]string{}, nil }
+		procs, err := lookupToolProcessesWith(context.Background(), table, cwds)
+		require.NoError(t, err)
+		assert.Empty(t, procs)
+	})
+	t.Run("still unreadable keeps blocking", func(t *testing.T) {
+		cwds := func(context.Context, []int) (map[int]string, error) { return map[int]string{}, nil }
+		procs, err := lookupToolProcessesWith(context.Background(), osProcs(4242), cwds)
+		require.NoError(t, err)
+		require.Len(t, procs, 1)
+		assert.Empty(t, procs[0].Cwd)
+		assert.Equal(t, 4242, procs[0].pid)
+	})
+	t.Run("readable processes cost no second read", func(t *testing.T) {
+		reads := 0
+		table := func(ctx context.Context) ([]osshim.Process, error) {
+			reads++
+			return osProcs(4242)(ctx)
+		}
+		cwds := func(_ context.Context, pids []int) (map[int]string, error) {
+			return map[int]string{pids[0]: "/work"}, nil
+		}
+		_, err := lookupToolProcessesWith(context.Background(), table, cwds)
+		require.NoError(t, err)
+		assert.Equal(t, 1, reads)
+	})
 }
 
 func TestProjectArtifacts_SourceDirectoriesNamedLikeArtifactsAreSampled(t *testing.T) {
@@ -604,7 +700,7 @@ func TestProjectArtifacts_UnreadableDirectoryNamesToolAndPid(t *testing.T) {
 
 	res := h.clean(CleanOptions{Mode: CleanModeFull})
 
-	assert.Contains(t, res.Output, "node (pid 4242) is running and its directory cannot be read")
+	assert.Contains(t, res.Output, "node (pid 4242, node x.js) is running and its directory cannot be read")
 }
 
 func TestProjectArtifacts_RootsDifferingOnlyByCaseScanOnce(t *testing.T) {
