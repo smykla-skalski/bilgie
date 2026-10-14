@@ -219,10 +219,17 @@ func (p *UVProvider) acquireLock() (release func(), reason string) {
 // uv cache always holds a CACHEDIR.TAG. A missing or empty directory has
 // nothing to lose.
 func (p *UVProvider) RootProblem() string {
+	info, statErr := os.Stat(p.dir)
+	switch {
+	case errors.Is(statErr, fs.ErrNotExist):
+		return ""
+	case statErr != nil:
+		return fmt.Sprintf("cannot verify %s is a uv cache: %v", p.dir, statErr)
+	case !info.IsDir():
+		return fmt.Sprintf("cannot verify %s is a uv cache: not a directory", p.dir)
+	}
 	entries, err := os.ReadDir(p.dir)
 	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		return ""
 	case err != nil:
 		return fmt.Sprintf("cannot verify %s is a uv cache: %v", p.dir, err)
 	case len(entries) == 0:
