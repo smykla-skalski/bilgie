@@ -241,7 +241,7 @@ func (p *ProjectArtifactsProvider) Clean(ctx context.Context, opts CleanOptions)
 	}
 
 	pass := p.newPass(ctx, scan)
-	pass.minIdle = p.idleFor(opts.Pressure)
+	pass.applyPressure(opts.Pressure)
 	pass.cands = pass.candidates(ctx)
 	pass.dryRun = opts.DryRun
 	remaining := scan.total()
@@ -389,6 +389,8 @@ type pass struct {
 	procs    []toolProcess
 	procsErr error
 	dirty    map[string]string
+	// allowIgnored lets git-ignored artifacts through a dirty repository.
+	allowIgnored bool
 	// minIdle is the idle threshold this pass applies, after pressure scaling.
 	minIdle time.Duration
 
@@ -399,6 +401,14 @@ type pass struct {
 	openErr   error
 	openAt    time.Time
 	openDone  time.Time
+}
+
+// applyPressure sets what a pass relaxes under disk pressure: the idle
+// threshold and, from the critical tier, the dirty-repository skip for
+// git-ignored artifacts.
+func (ps *pass) applyPressure(level Pressure) {
+	ps.minIdle = ps.p.idleFor(level)
+	ps.allowIgnored = level >= PressureCritical
 }
 
 // removalReason runs every check before an artifact is removed whole, the
@@ -646,10 +656,17 @@ func (p *ProjectArtifactsProvider) scan(ctx context.Context) (*artifactScan, err
 type candidate struct {
 	art  *artifactDir
 	proj *project
+	// dirtyAllowed marks an artifact let through a dirty repository
+	// because git ignores it.
+	dirtyAllowed bool
 }
 
 func (c *candidate) detail(now time.Time, minIdle time.Duration) string {
-	return fmt.Sprintf("%s, project %s, idle %dd, min_idle %s", c.art.Kind, filepath.Base(c.proj.Dir), idleDays(now, latest(c.proj.newest, c.art.used)), formatIdle(minIdle))
+	d := fmt.Sprintf("%s, project %s, idle %dd, min_idle %s", c.art.Kind, filepath.Base(c.proj.Dir), idleDays(now, latest(c.proj.newest, c.art.used)), formatIdle(minIdle))
+	if c.dirtyAllowed {
+		d += ", allowed despite uncommitted changes"
+	}
+	return d
 }
 
 // formatIdle prints whole days as Nd, the unit users configure.
@@ -732,5 +749,13 @@ func (ps *pass) guard(ctx context.Context, c *candidate) string {
 	if reason := ps.busyReason(c); reason != "" {
 		return reason
 	}
-	return ps.dirtyReason(ctx, c.proj)
+	reason := ps.dirtyReason(ctx, c.proj)
+	if reason != reasonDirty || !ps.allowIgnored {
+		return reason
+	}
+	if reason := ps.ignoredReason(ctx, c); reason != "" {
+		return reason
+	}
+	c.dirtyAllowed = true
+	return ""
 }
