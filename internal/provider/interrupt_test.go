@@ -59,8 +59,9 @@ func entriesTotal(res CleanResult) int64 {
 
 func TestJetBrainsProvider_InterruptKeepsEntriesInStepWithBytes(t *testing.T) {
 	root := t.TempDir()
-	var dirs []string
-	for _, name := range []string{"GoLand2023.1", "GoLand2023.2", "GoLand2023.3"} {
+	names := []string{"GoLand2023.1", "GoLand2023.2", "GoLand2023.3"}
+	dirs := make([]string, 0, len(names))
+	for _, name := range names {
 		dir := filepath.Join(root, name)
 		require.NoError(t, os.MkdirAll(dir, 0o750))
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "f"), make([]byte, 1024), 0o600))
