@@ -314,6 +314,9 @@ type Provider struct {
 
 	// MaxDepth bounds how deep project-artifacts looks below each root (default 4).
 	MaxDepth int `mapstructure:"max_depth" yaml:"max_depth,omitempty"`
+	// TrimIdle is how long a Rust build unit must go unused before project-artifacts
+	// trims it from the target of an active project (default 30d).
+	TrimIdle string `mapstructure:"trim_idle" yaml:"trim_idle,omitempty"`
 	// ScanBudget bounds project discovery per pass for project-artifacts (default 10s).
 	ScanBudget string `mapstructure:"scan_budget" yaml:"scan_budget,omitempty"`
 	// PassBudget bounds one whole clean pass of project-artifacts; candidates
@@ -442,12 +445,12 @@ func (p Provider) validateProjectArtifacts() error {
 	if p.MaxDepth > MaxProjectDepth {
 		return fmt.Errorf("max_depth must be at most %d, got %d", MaxProjectDepth, p.MaxDepth)
 	}
-	for field, value := range map[string]string{"min_idle": p.MinIdle, "scan_budget": p.ScanBudget, "pass_budget": p.PassBudget} {
+	for field, value := range map[string]string{"min_idle": p.MinIdle, "trim_idle": p.TrimIdle, "scan_budget": p.ScanBudget, "pass_budget": p.PassBudget} {
 		if value == "" {
 			continue
 		}
 		parse := ParseBudget
-		if field == "min_idle" {
+		if field == "min_idle" || field == "trim_idle" {
 			parse = ParseDuration
 		}
 		d, err := parse(value)

@@ -541,6 +541,7 @@ providers:
 | `clean_timeout` | Max runtime of `clean_cmd` before it is cancelled and reported (default `2m`; units `ms`, `s`, `m`, `h`, `d`) |
 | `type` | `dir-pattern` removes whole stale directories matching a glob in `paths`; `project-artifacts` removes build artifacts of idle projects found below the roots in `paths` |
 | `min_idle` | `dir-pattern`: minimum idle time, from the newest mtime in the tree (default `2h`); `project-artifacts`: project idle time (default `60d`); units `m`, `h`, `d`, minimum `1m` |
+| `trim_idle` | `project-artifacts`: Rust build units (`.fingerprint`, `build`, `deps`, `incremental`) unused for this long are removed from the `target/` of an active project; a profile whose `.cargo-lock` is held is skipped, and dry-run lists the bytes it would trim (default `30d`; units `m`, `h`, `d`, minimum `1m`) |
 | `skip_if_open` | `dir-pattern`, `project-artifacts`: skip directories with open files via `lsof +D` (default `true`) |
 | `skip_if_git_worktree` | `dir-pattern`: skip directories containing a `.git` entry (default `true`) |
 | `max_depth` | `project-artifacts`: directory levels searched below each root (default `4`, from 1 to 16; a negative value is an error) |
