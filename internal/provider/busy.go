@@ -387,7 +387,7 @@ func (a *busyAging) agedOut(p *osshim.Process, now time.Time) bool {
 	if a == nil || p.Started.IsZero() || now.Sub(p.Started) < a.after {
 		return false
 	}
-	subs := toolSubcommands(p.CommandLine, a.tool, runtime.GOOS == "windows")
+	subs := toolSubcommands(commandText(p), a.tool, runtime.GOOS == "windows")
 	if len(subs) == 0 {
 		return false
 	}

@@ -549,6 +549,16 @@ func TestOtherGuardsNeverAgeOut(t *testing.T) {
 	}
 }
 
+func TestGoGuard_LinuxCommSuffixDoesNotDefeatAging(t *testing.T) {
+	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	// the Linux listing appends the kernel process name to the command line
+	old := &osshim.Process{PID: 4, CommandLine: "go run mock.go go", Args: "go run mock.go", Started: now.Add(-24 * time.Hour)}
+	assert.True(t, goBusyAging.agedOut(old, now))
+
+	build := &osshim.Process{PID: 5, CommandLine: "go build ./... go", Args: "go build ./...", Started: now.Add(-24 * time.Hour)}
+	assert.False(t, goBusyAging.agedOut(build, now))
+}
+
 func TestGoGuard_WindowsImageNameAlwaysBlocks(t *testing.T) {
 	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
 	assert.False(t, goBusyAging.agedOut(
