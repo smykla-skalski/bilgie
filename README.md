@@ -163,7 +163,7 @@ stops after
 level. A root that is home, a parent of home or the filesystem root is ignored, and the output
 says so: as a warning when other roots were scanned, as the skip reason when none was.
 
-A project is idle when all of these are older than `min_idle` (default 60 days): the newest
+A project is idle when all of these are older than `min_idle` (default 7 days): the newest
 mtime among files outside the artifacts and `.git` (a sample of the first 3000 entries, breadth
 first; a sample cut short skips the project, with or without git), and the git `HEAD` and reflog
 time. A folder that merely shares an artifact's name, such as `src/target/`, is source and is
@@ -238,7 +238,7 @@ providers:
   project-artifacts:
     paths: [~/sideprojects, ~/work]
     max_size: 20G
-    min_idle: 60d
+    min_idle: 7d
     max_depth: 4
     scan_budget: 10s
     pass_budget: 30s
@@ -338,7 +338,7 @@ and starts no provider unless it decides to run a pass. A healthy tick prints no
 |------------|------------------|
 | healthy | nothing, except a routine pass every `auto.interval` (default 30m) that trims providers over their limit |
 | low | a full pass, at most every `auto.low_cooldown` (default 10m) |
-| critical | the same pass at the shorter `auto.critical_cooldown` (default 2m); cheapest-to-rebuild providers go first and the pass stops as soon as space recovers |
+| critical | the same pass at the shorter `auto.critical_cooldown` (default 2m); providers expected to free the most go first (rebuild cost breaks ties) and the pass stops as soon as space recovers |
 | emergency | as critical, with the stale-directory sweeps (`dir-pattern` providers such as `sail-dirs`, even when disabled) first |
 | falling | a low-tier pass when the projected free space crosses the low threshold within `auto.forecast` (default 15m) |
 
@@ -379,8 +379,10 @@ and always trims in smart mode (files older than `max_age`, then LRU to `max_siz
 |------|------------|-----------|
 | ok | at or above the low threshold | only enabled providers over their limit |
 | low | below the low threshold | every enabled provider, cheapest to rebuild first; stops once free space is back above the threshold plus the hysteresis |
-| critical | below `critical_free` | the low-tier trim, scheduled at the short cooldown |
-| emergency | below `emergency_free` | the stale-directory sweeps first (`dir-pattern` providers such as `sail-dirs`, even when disabled), then the low-tier trim |
+| critical | below `critical_free` | the low-tier trim, scheduled at the short cooldown, with the providers expected to free the most first |
+| emergency | below `emergency_free` | the stale-directory sweeps first (`dir-pattern` providers such as `sail-dirs`, even when disabled), then the critical-tier order |
+
+Each provider gets its own 10 minute budget inside the 45 minute pass deadline. A provider that exceeds it is reported as timed out with the bytes it freed so far, and the pass moves on to the next provider. The budget is fixed and not configurable.
 
 Safety rules:
 
@@ -540,7 +542,7 @@ providers:
 | `clean_cmd` | Command for full clean (empty = file-based deletion) |
 | `clean_timeout` | Max runtime of `clean_cmd` before it is cancelled and reported (default `2m`; units `ms`, `s`, `m`, `h`, `d`) |
 | `type` | `dir-pattern` removes whole stale directories matching a glob in `paths`; `project-artifacts` removes build artifacts of idle projects found below the roots in `paths` |
-| `min_idle` | `dir-pattern`: minimum idle time, from the newest mtime in the tree (default `2h`); `project-artifacts`: project idle time (default `60d`); units `m`, `h`, `d`, minimum `1m` |
+| `min_idle` | `dir-pattern`: minimum idle time, from the newest mtime in the tree (default `2h`); `project-artifacts`: project idle time (default `7d`); units `m`, `h`, `d`, minimum `1m` |
 | `skip_if_open` | `dir-pattern`, `project-artifacts`: skip directories with open files via `lsof +D` (default `true`) |
 | `skip_if_git_worktree` | `dir-pattern`: skip directories containing a `.git` entry (default `true`) |
 | `max_depth` | `project-artifacts`: directory levels searched below each root (default `4`, from 1 to 16; a negative value is an error) |

@@ -989,3 +989,17 @@ func TestProcLabel(t *testing.T) {
 	assert.True(t, strings.HasSuffix(long, "...)"))
 	assert.Less(t, len(long), 100)
 }
+
+func TestMeasureTree_CountsHardLinkOnce(t *testing.T) {
+	dir := t.TempDir()
+	orig := filepath.Join(dir, "a.bin")
+	require.NoError(t, os.WriteFile(orig, make([]byte, 1000), 0o600))
+	linkOrSkip(t, orig, filepath.Join(dir, "b.bin"))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "c.bin"), make([]byte, 10), 0o600))
+
+	size, files, unreadable := measureTree(context.Background(), dir)
+
+	assert.False(t, unreadable)
+	assert.Equal(t, int64(1010), size)
+	assert.Equal(t, int64(3), files)
+}

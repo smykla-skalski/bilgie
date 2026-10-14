@@ -120,14 +120,15 @@ func (f *fakeProvider) Clean(_ context.Context, o provider.CleanOptions) (provid
 }
 
 type harness struct {
-	t     *testing.T
-	cfg   *config.Config
-	calls []string
-	opts  []provider.CleanOptions
-	fakes map[string]*fakeProvider
-	out   bytes.Buffer
-	home  string
-	wrap  map[string]provider.Provider
+	t      *testing.T
+	cfg    *config.Config
+	calls  []string
+	opts   []provider.CleanOptions
+	fakes  map[string]*fakeProvider
+	out    bytes.Buffer
+	home   string
+	wrap   map[string]provider.Provider
+	budget time.Duration
 }
 
 func newHarness(t *testing.T) *harness {
@@ -189,9 +190,10 @@ func (h *harness) runWith(verbose, dryRun bool, free ...int64) (Report, error) {
 			}
 			return f, nil
 		},
-		Out:     &h.out,
-		Home:    h.home,
-		Verbose: verbose,
+		Out:            &h.out,
+		Home:           h.home,
+		Verbose:        verbose,
+		ProviderBudget: h.budget,
 	}
 	return Run(h.t.Context(), h.cfg, dryRun, deps)
 }
@@ -981,4 +983,21 @@ func TestRun_VerbosePrintsEveryResultLikeBefore(t *testing.T) {
 	assert.Contains(t, h.out.String(), "pip: skipped (within limit)")
 	assert.Contains(t, h.out.String(), "npm: freed 1.0 GiB")
 	assert.NotContains(t, h.out.String(), "total:")
+}
+
+func TestLoadErrors_SkipsProvidersAutoNeverRuns(t *testing.T) {
+	h := newHarness(t)
+	h.add("renamed-prune", true, true, func(_ *fakeProvider, pc *config.Provider) {
+		pc.CleanCmd = "docker volume prune -f"
+	})
+	h.add("docker-volumes", true, true)
+	h.add("broken", true, true)
+
+	failing := func(name string, _ config.Provider) (provider.Provider, error) {
+		return nil, errors.New("load " + name)
+	}
+	errs := LoadErrors(h.cfg, failing)
+
+	require.Len(t, errs, 1)
+	assert.EqualError(t, errs[0], "load broken")
 }
