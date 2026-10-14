@@ -132,6 +132,7 @@ Providers are auto-detected — only tools installed on your system appear in th
 | gh | 1G | file-based |
 | chrome-devtools-mcp (disabled by default; never evicts `chrome-profile-*`) | 2G | whole-entry |
 | vscode-shipit | 1G | file-based |
+| codex-sessions (disabled by default; `~/.codex/sessions`, only `rollout-*.jsonl` older than `max_age`, default 90d, never files open in a process; removed sessions can no longer be resumed with `codex resume`) | 20G (not enforced) | age-based file removal |
 | **Project artifacts** | | |
 | project-artifacts (Rust `target`, `node_modules`, Python venvs of idle projects) | 20G | whole-directory, oldest project first |
 | **Toolchains** | | |

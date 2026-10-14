@@ -56,3 +56,12 @@ func TestDefaultProviders_ChromeDevtoolsProtectsProfiles(t *testing.T) {
 	assert.False(t, p.Enabled)
 	assert.Contains(t, p.SkipPrefixes, "chrome-profile-")
 }
+
+func TestDefaultProviders_CodexSessions(t *testing.T) {
+	p, ok := DefaultProviders()["codex-sessions"]
+	require.True(t, ok)
+	assert.False(t, p.Enabled, "removing a session drops it from codex resume")
+	assert.Equal(t, []string{"~/.codex/sessions"}, p.Paths)
+	assert.Equal(t, "90d", p.MaxAge)
+	assert.Empty(t, p.CleanCmd)
+}
