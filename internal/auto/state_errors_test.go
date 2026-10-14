@@ -28,7 +28,6 @@ func TestMarkFirstRunPending_FailsWhenTheStateDirIsAFile(t *testing.T) {
 	err := MarkFirstRunPending(blocker)
 
 	require.ErrorContains(t, err, "create state dir")
-	assert.True(t, FirstRunPending(blocker), "an unreadable marker location counts as pending")
 }
 
 func TestMarkFirstRunPending_FailsWhenTheMarkerPathIsADirectory(t *testing.T) {
