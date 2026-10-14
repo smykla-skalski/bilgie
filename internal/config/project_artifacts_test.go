@@ -149,3 +149,39 @@ func TestProjectArtifactsPassBudgetAndDepthMessages(t *testing.T) {
 	pa.MaxDepth = 3
 	assert.NoError(t, pa.validateProjectArtifacts())
 }
+
+func TestProjectArtifactsTierIdleSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`version: "1"
+providers:
+  project-artifacts:
+    tier_scaling: false
+    critical_min_idle: 3d
+    emergency_min_idle: 12h
+`), 0o600))
+	loader := NewLoader()
+	loader.SetConfigPath(path)
+	loader.SetPlatform(linPlatform)
+
+	cfg, err := loader.Load()
+
+	require.NoError(t, err)
+	got := cfg.Providers["project-artifacts"]
+	require.NotNil(t, got.TierScaling)
+	assert.False(t, *got.TierScaling)
+	assert.Equal(t, "3d", got.CriticalMinIdle)
+	assert.Equal(t, "12h", got.EmergencyMinIdle)
+	assert.Equal(t, "7d", got.MinIdle, "unset fields keep their defaults")
+}
+
+func TestProjectArtifactsTierIdleValidation(t *testing.T) {
+	for _, body := range []string{
+		"    critical_min_idle: 10s\n",
+		"    emergency_min_idle: 10s\n",
+	} {
+		cfg, err := loadAgeConfig(t, "  x:\n    type: project-artifacts\n    paths: [/a]\n    max_size: 1G\n"+body)
+		require.Error(t, err)
+		assert.Nil(t, cfg)
+		assert.Contains(t, err.Error(), "under the 1m minimum")
+	}
+}

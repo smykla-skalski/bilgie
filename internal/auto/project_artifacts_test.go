@@ -94,3 +94,28 @@ func TestSortByRebuildCost_ProjectArtifactsAfterCaches(t *testing.T) {
 	sortByRebuildCost(names)
 	assert.Equal(t, []string{"npm", "go-build", "xcode-deriveddata", "project-artifacts"}, names)
 }
+
+func TestRun_PassesPressureToProvider(t *testing.T) {
+	tests := []struct {
+		name string
+		free int64
+		want provider.Pressure
+	}{
+		{"ok", 400 * gib, provider.PressureNone},
+		{"low", 100 * gib, provider.PressureNone},
+		{"critical", 8 * gib, provider.PressureCritical},
+		{"emergency", 2 * gib, provider.PressureEmergency},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.addAware("project-artifacts", true)
+
+			_, err := h.run(true, tt.free)
+
+			require.NoError(t, err)
+			require.NotEmpty(t, h.opts)
+			assert.Equal(t, tt.want, h.opts[len(h.opts)-1].Pressure)
+		})
+	}
+}
