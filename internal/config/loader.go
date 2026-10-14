@@ -187,6 +187,9 @@ func mergeProjectArtifacts(l *Loader, name string, merged, user *Provider) {
 	if l.v.IsSet(prefix + "max_depth") {
 		merged.MaxDepth = user.MaxDepth
 	}
+	if l.v.IsSet(prefix + "trim_idle") {
+		merged.TrimIdle = user.TrimIdle
+	}
 	if l.v.IsSet(prefix + "scan_budget") {
 		merged.ScanBudget = user.ScanBudget
 	}

@@ -27,6 +27,7 @@ const (
 	openSnapshotTTL           = 2 * time.Second
 	removalSnapshotTTL        = 250 * time.Millisecond
 	defaultArtifactDepth      = 4
+	defaultArtifactTrimIdle   = 30 * 24 * time.Hour
 	openCheckTimeout          = time.Minute
 	scanCacheTTL              = 2 * time.Minute
 )
@@ -40,6 +41,7 @@ type ProjectArtifactsProvider struct {
 	*BaseProvider
 
 	minIdle    time.Duration
+	trimIdle   time.Duration
 	tierIdle   map[Pressure]time.Duration
 	budget     time.Duration
 	passBudget time.Duration
@@ -71,6 +73,10 @@ func NewProjectArtifactsProvider(name string, cfg config.Provider) (*ProjectArti
 	}
 
 	minIdle, err := durationOr(cfg.MinIdle, defaultArtifactMinIdle, "min_idle", config.ParseDuration)
+	if err != nil {
+		return nil, err
+	}
+	trimIdle, err := durationOr(cfg.TrimIdle, defaultArtifactTrimIdle, "trim_idle", config.ParseDuration)
 	if err != nil {
 		return nil, err
 	}
@@ -108,6 +114,7 @@ func NewProjectArtifactsProvider(name string, cfg config.Provider) (*ProjectArti
 	p := &ProjectArtifactsProvider{
 		BaseProvider: base,
 		minIdle:      minIdle,
+		trimIdle:     trimIdle,
 		tierIdle:     tierIdle,
 		budget:       budget,
 		passBudget:   passBudget,
@@ -250,7 +257,21 @@ func (p *ProjectArtifactsProvider) Clean(ctx context.Context, opts CleanOptions)
 			return finish(err)
 		}
 		if reason := pass.cheapReason(c); reason != "" {
-			skip(c, reason)
+			if !pass.trimmable(c, reason) {
+				skip(c, reason)
+				continue
+			}
+			if p.satisfied(opts, remaining-freed, freed) {
+				break
+			}
+			trimmed, err := p.recordTrim(ctx, c, opts.DryRun, &out, &result)
+			freed += trimmed
+			switch {
+			case errors.Is(err, errNothingTrimmed):
+				skip(c, reason)
+			case err != nil:
+				errs = append(errs, err)
+			}
 			continue
 		}
 		if p.satisfied(opts, remaining-freed, freed) {
@@ -260,22 +281,7 @@ func (p *ProjectArtifactsProvider) Clean(ctx context.Context, opts CleanOptions)
 			skip(c, "pass time budget")
 			continue
 		}
-		reason := pass.guard(ctx, c)
-		if reason == "" {
-			reason = pass.openReason(ctx, c)
-		}
-		if reason == "" {
-			reason = p.finalReason(ctx, c, pass.minIdle)
-		}
-		if reason == "" && !opts.DryRun {
-			reason = pass.openReasonWithin(ctx, c, removalSnapshotTTL)
-		}
-		if reason == "" {
-			if !opts.DryRun {
-				pass.procs, pass.procsErr = p.processes(ctx)
-			}
-			reason = pass.busyReason(c)
-		}
+		reason := pass.removalReason(ctx, c, opts.DryRun)
 		if err := ctx.Err(); err != nil {
 			return finish(err)
 		}
@@ -393,6 +399,29 @@ type pass struct {
 	openErr   error
 	openAt    time.Time
 	openDone  time.Time
+}
+
+// removalReason runs every check before an artifact is removed whole, the
+// slow ones last. Before a real removal it rereads open files and processes.
+func (ps *pass) removalReason(ctx context.Context, c *candidate, dryRun bool) string {
+	p := ps.p
+	reason := ps.guard(ctx, c)
+	if reason == "" {
+		reason = ps.openReason(ctx, c)
+	}
+	if reason == "" {
+		reason = p.finalReason(ctx, c, ps.minIdle)
+	}
+	if reason == "" && !dryRun {
+		reason = ps.openReasonWithin(ctx, c, removalSnapshotTTL)
+	}
+	if reason == "" {
+		if !dryRun {
+			ps.procs, ps.procsErr = p.processes(ctx)
+		}
+		reason = ps.busyReason(c)
+	}
+	return reason
 }
 
 // noteSkip remembers the first reason an artifact was skipped.
