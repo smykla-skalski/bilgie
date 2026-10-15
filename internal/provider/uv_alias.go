@@ -5,7 +5,10 @@ import (
 	"strings"
 )
 
-const maxCandidate = 1024
+const (
+	maxCandidate = 1024
+	maxMisses    = 8
+)
 
 // pathResolver resolves symlinks once per path for one evidence snapshot. A
 // path that does not resolve has no entry, so callers keep its raw spelling.
@@ -33,36 +36,38 @@ func (r *pathResolver) resolve(path string) (string, bool) {
 	return resolved, resolved != ""
 }
 
-// resolvedPaths returns every absolute path text names, resolved through all
-// symlinks and normalized for comparison. Any alias of a directory therefore
-// compares equal to the directory itself, and so does a symlink to it. The
-// raw spellings are matched separately, so a path that does not resolve
-// loses nothing.
+// resolvedPaths returns every absolute path text names and every directory
+// along it, resolved through all symlinks and normalized for comparison. Any
+// alias of a directory therefore compares equal to the directory itself, a
+// symlink to it too, and a leaf that links elsewhere (a venv's bin/python)
+// does not hide the directory in front of it. The raw spellings are matched
+// separately, so a path that does not resolve loses nothing.
 func (r *pathResolver) resolvedPaths(text string) []string {
 	var out []string
 	seen := map[string]bool{}
-	for i := range len(text) {
-		if text[i] != '/' || !pathStart(text, i) {
-			continue
-		}
-		resolved, ok := r.resolveLongest(text[i:candidateEnd(text, i)])
-		if !ok {
-			continue
-		}
-		if key := normalizeText(resolved); !seen[key] {
+	add := func(path string) {
+		if key := normalizeText(path); !seen[key] {
 			seen[key] = true
 			out = append(out, key)
+		}
+	}
+	for i := range len(text) {
+		if text[i] == '/' && pathStart(text, i) {
+			r.walk(text[i:candidateEnd(text, i)], add)
 		}
 	}
 	return out
 }
 
-// resolveLongest resolves the longest leading part of candidate that exists
-// and keeps the rest as written: a path a process names may continue past
-// the file system (arguments after a space, a file not created yet).
-func (r *pathResolver) resolveLongest(candidate string) (string, bool) {
-	for end := len(candidate); end > 1; end-- {
-		if end < len(candidate) && candidate[end] != '/' && candidate[end] != ' ' {
+// walk resolves each leading part of candidate that ends at a slash or a
+// character that may end a path, and reports it. The part past the longest
+// one that exists is kept as written: a link the sweep has just removed or a
+// file not created yet still names the directory it lies in.
+func (r *pathResolver) walk(candidate string, add func(string)) {
+	deepest, deepestResolved, misses := "", "", 0
+	for end := 1; end <= len(candidate) && misses < maxMisses; end++ {
+		slash := end < len(candidate) && candidate[end] == '/'
+		if !slash && end != len(candidate) && !pathEnd(candidate[end]) {
 			continue
 		}
 		prefix := strings.TrimRight(candidate[:end], " ")
@@ -70,10 +75,18 @@ func (r *pathResolver) resolveLongest(candidate string) (string, bool) {
 			continue
 		}
 		if resolved, ok := r.resolve(prefix); ok {
-			return resolved + candidate[len(prefix):], true
+			add(resolved)
+			deepest, deepestResolved, misses = prefix, resolved, 0
+			continue
 		}
+		if slash {
+			break
+		}
+		misses++
 	}
-	return "", false
+	if deepest != "" && len(deepest) < len(candidate) {
+		add(deepestResolved + candidate[len(deepest):])
+	}
 }
 
 // pathStart reports whether the slash at text[i] begins a path rather than
@@ -92,17 +105,20 @@ func pathStart(text string, i int) bool {
 	return true
 }
 
-// candidateEnd is where the path that starts at text[from] stops: at a
-// delimiter that cannot be part of a path, or at the length cap. Spaces stay
-// in, because a path may contain them.
+// candidateEnd is where the path that starts at text[from] stops: at the end
+// of the line or at the length cap. Everything else may be part of a path.
 func candidateEnd(text string, from int) int {
 	end := from + 1
-	for end < len(text) && end-from < maxCandidate {
-		switch text[end] {
-		case '\n', 0, ':', ';', ',', '"', '\'', '=', '(', ')', '<', '>', '|', '`', '$', '&', '[', ']', '{', '}':
-			return end
-		}
+	for end < len(text) && end-from < maxCandidate && text[end] != '\n' && text[end] != 0 {
 		end++
 	}
 	return end
+}
+
+func pathEnd(b byte) bool {
+	switch b {
+	case ' ', ':', ';', ',', '"', '\'', '=', '(', ')', '<', '>', '|', '`', '$', '&', '[', ']', '{', '}':
+		return true
+	}
+	return false
 }

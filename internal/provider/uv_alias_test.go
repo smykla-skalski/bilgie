@@ -186,6 +186,35 @@ func TestUVProvider_SweepKeepsAnEnvironmentWhoseLinkWasRemovedMidSweep(t *testin
 	f.requireIntact(t, envA, envB)
 }
 
+func TestUVProvider_SweepKeepsAnEnvironmentWhoseInterpreterLinksElsewhere(t *testing.T) {
+	f := newSweepFixture(t)
+	alias := f.aliasOf(t)
+	for _, id := range []string{envA, envB} {
+		require.NoError(t, os.MkdirAll(filepath.Join(f.envs[id], "bin"), 0o700))
+		require.NoError(t, os.Symlink("/bin/sh", filepath.Join(f.envs[id], "bin", "python")))
+	}
+	f.setProcs(f.aged, f.serverFor(envA), proc(900, 1, time.Minute, filepath.Join(alias, "archive-v0", envB, "bin", "python")+" job.py"))
+
+	res, err := f.p.Clean(context.Background(), CleanOptions{Mode: CleanModeSmart})
+	require.NoError(t, err)
+	assert.NotEmpty(t, res.SkipReason)
+	f.requireIntact(t, envA, envB)
+}
+
+func TestUVProvider_SweepKeepsAnEnvironmentUnderAnAliasWithPunctuation(t *testing.T) {
+	f := newSweepFixture(t)
+	resolved, err := filepath.EvalSymlinks(f.dir)
+	require.NoError(t, err)
+	alias := filepath.Join(t.TempDir(), "Dropbox (Personal)")
+	require.NoError(t, os.Symlink(resolved, alias))
+	f.setProcs(f.aged, f.serverFor(envA), proc(900, 1, time.Minute, filepath.Join(alias, "archive-v0", envB, "bin", "python")+" job.py"))
+
+	res, err := f.p.Clean(context.Background(), CleanOptions{Mode: CleanModeSmart})
+	require.NoError(t, err)
+	assert.NotEmpty(t, res.SkipReason)
+	f.requireIntact(t, envA, envB)
+}
+
 func TestResolvedPathsFollowEveryAlias(t *testing.T) {
 	target := t.TempDir()
 	resolvedTarget, err := filepath.EvalSymlinks(target)
@@ -201,7 +230,7 @@ func TestResolvedPathsFollowEveryAlias(t *testing.T) {
 		text string
 		want string
 	}{
-		{"path with spaces", "PATH=" + spaced + "/bin:/usr/bin", want + "/bin"},
+		{"path with spaces", "PATH=" + spaced + "/bin:/usr/bin", want + "/bin:/usr/bin"},
 		{"command line", plain + "/x/python script.py", want + "/x/python script.py"},
 		{"glued flag", "cc -I" + plain + "/inc x.c", want + "/inc x.c"},
 		{"file not created yet", plain + "/new.log", want + "/new.log"},
