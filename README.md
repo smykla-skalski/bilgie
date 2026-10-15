@@ -639,7 +639,7 @@ auto:
   min_free_pct: 5           # ... or this percentage of the volume (0 disables)
   min_free_cap: 100G        # the percentage part never exceeds this
   critical_free: 10G        # critical tier below this
-  emergency_free: 5G        # emergency tier below this (stale-directory sweeps)
+  emergency_free: 5G        # emergency tier below this (all stale-directory sweeps)
   hysteresis: 2G            # a tier eases only this far above its threshold
   low_cooldown: 10m         # minimum gap between passes at the low tier
   critical_cooldown: 2m     # ... at the critical and emergency tiers

@@ -96,6 +96,20 @@ func TestLoader_SweepTier(t *testing.T) {
 	}
 }
 
+func TestLoader_RepurposedSweepDropsInheritedTier(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	yaml := "version: \"1\"\nproviders:\n  sail-dirs:\n    type: project-artifacts\n    enabled: true\n    paths: [~/code]\n"
+	require.NoError(t, os.WriteFile(configPath, []byte(yaml), 0o600))
+	loader := NewLoader()
+	loader.SetConfigPath(configPath)
+
+	cfg, err := loader.Load()
+	require.NoError(t, err)
+
+	assert.Empty(t, cfg.Providers["sail-dirs"].SweepTier)
+	require.NoError(t, cfg.Validate())
+}
+
 func TestConfig_Validate_SweepTier(t *testing.T) {
 	sweep := func(tier string, typ string) *Config {
 		return &Config{Providers: map[string]Provider{

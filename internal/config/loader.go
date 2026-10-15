@@ -141,24 +141,7 @@ func (l *Loader) Load() (*Config, error) {
 		if l.v.IsSet("providers." + name + ".enabled") {
 			merged.Enabled = userP.Enabled
 		}
-		if l.v.IsSet("providers." + name + ".type") {
-			merged.Type = userP.Type
-		}
-		if l.v.IsSet("providers." + name + ".min_idle") {
-			merged.MinIdle = userP.MinIdle
-		}
-		if l.v.IsSet("providers." + name + ".skip_if_open") {
-			merged.SkipIfOpen = userP.SkipIfOpen
-		}
-		if l.v.IsSet("providers." + name + ".skip_if_git_worktree") {
-			merged.SkipIfGitWorktree = userP.SkipIfGitWorktree
-		}
-		if l.v.IsSet("providers." + name + ".owner_marker") {
-			merged.OwnerMarker = userP.OwnerMarker
-		}
-		if l.v.IsSet("providers." + name + ".sweep_tier") {
-			merged.SweepTier = userP.SweepTier
-		}
+		l.mergeDirPattern(&merged, name, &userP)
 		mergeProjectArtifacts(l, name, &merged, &userP)
 		// Union, never replace: an empty user list must not strip protections.
 		if l.v.IsSet("providers." + name + ".skip_prefixes") {
@@ -172,6 +155,33 @@ func (l *Loader) Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// mergeDirPattern applies the user's type and directory-pattern settings over
+// the defaults, field by field.
+func (l *Loader) mergeDirPattern(merged *Provider, name string, user *Provider) {
+	prefix := "providers." + name + "."
+	if l.v.IsSet(prefix + "type") {
+		merged.Type = user.Type
+	}
+	if l.v.IsSet(prefix + "min_idle") {
+		merged.MinIdle = user.MinIdle
+	}
+	if l.v.IsSet(prefix + "skip_if_open") {
+		merged.SkipIfOpen = user.SkipIfOpen
+	}
+	if l.v.IsSet(prefix + "skip_if_git_worktree") {
+		merged.SkipIfGitWorktree = user.SkipIfGitWorktree
+	}
+	if l.v.IsSet(prefix + "owner_marker") {
+		merged.OwnerMarker = user.OwnerMarker
+	}
+	if l.v.IsSet(prefix + "sweep_tier") {
+		merged.SweepTier = user.SweepTier
+	} else if merged.Type != TypeDirPattern {
+		// A built-in repurposed to another type must not keep the inherited tier.
+		merged.SweepTier = ""
+	}
 }
 
 // mergePaths applies the user's path list unless it is another OS's defaults.
