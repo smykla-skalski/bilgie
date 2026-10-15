@@ -84,11 +84,13 @@ func TestWindowsLinks_DirPatternNeverDeletesThroughLink(t *testing.T) {
 			kind.make(t, filepath.Join(inner, "escape"), outside)
 
 			p := newTestDirProvider(t, root, func(c *config.Provider) { c.MinIdle = "0s" })
-			_, err := p.Clean(t.Context(), CleanOptions{})
+			res, err := p.Clean(t.Context(), CleanOptions{})
 			require.NoError(t, err)
 
 			assertIntact(t, outside, file)
 			assert.False(t, exists(inner), "the stale directory goes, link included")
+			assert.True(t, exists(topLink), "a top-level link is skipped, never removed")
+			assert.Contains(t, res.Output, "skip: "+topLink)
 		})
 	}
 }

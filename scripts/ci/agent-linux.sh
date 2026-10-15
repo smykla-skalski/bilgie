@@ -62,7 +62,16 @@ systemd_run() {
 
   step "wait for the timer to run one tick"
   wait_for_tick
-  systemctl --user show bilgie.service -p Result -p ExecMainStatus
+  # tick.json is written before the pass runs, so wait for the unit to
+  # finish before trusting Result and ExecMainStatus.
+  local settle=0
+  while [ "$(systemctl --user show bilgie.service -p ActiveState --value)" = activating ] ||
+    [ "$(systemctl --user show bilgie.service -p ActiveState --value)" = active ]; do
+    [ "$settle" -lt 120 ] || fail "service still running after ${settle}s"
+    sleep 1
+    settle=$((settle + 1))
+  done
+  systemctl --user show bilgie.service -p Result -p ExecMainStatus -p ActiveState
   [ "$(systemctl --user show bilgie.service -p Result --value)" = success ] || fail "service run did not succeed"
   [ "$(systemctl --user show bilgie.service -p ExecMainStatus --value)" = 0 ] || fail "tick exited non-zero"
   echo "::endgroup::"
@@ -94,6 +103,18 @@ cron_run() {
 
   step "wait for cron to run one tick"
   wait_for_tick
+  # cron reports no exit status, so wait for the tick to end and require a
+  # clean log instead.
+  local settle=0
+  while pgrep -f "$bin tick" >/dev/null; do
+    [ "$settle" -lt 120 ] || fail "tick still running after ${settle}s"
+    sleep 1
+    settle=$((settle + 1))
+  done
+  if grep -qiE '^error|panic' "$state_dir/auto.log"; then
+    cat "$state_dir/auto.log"
+    fail "tick logged an error"
+  fi
   echo "::endgroup::"
 
   step "uninstall (cron fallback)"

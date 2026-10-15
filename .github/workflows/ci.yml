@@ -250,12 +250,14 @@ jobs:
   test:
     name: Test
     if: always()
-    needs: test-matrix
+    needs: [test-matrix, agent-linux, agent-windows]
     runs-on: ubuntu-latest
     steps:
-      - name: Require all test legs
+      - name: Require all test legs and real-host agent jobs
         run: |
           [ "${{ needs.test-matrix.result }}" = "success" ]
+          [ "${{ needs.agent-linux.result }}" = "success" ]
+          [ "${{ needs.agent-windows.result }}" = "success" ]
 
   build:
     name: Build
