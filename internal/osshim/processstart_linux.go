@@ -64,27 +64,9 @@ func processStartFromProc(root string, pid int) (time.Time, bool, error) {
 		return time.Time{}, false, fmt.Errorf("parse start of %s/%d/stat", root, pid)
 	}
 
-	boot, err := bootTime(root)
-	if err != nil {
-		return time.Time{}, false, err
+	boot := bootTime(root)
+	if boot.IsZero() {
+		return time.Time{}, false, fmt.Errorf("btime missing from %s/stat", root)
 	}
 	return boot.Add(time.Duration(ticks/clockTicks) * time.Second), true, nil
-}
-
-func bootTime(root string) (time.Time, error) {
-	path := filepath.Join(root, "stat")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return time.Time{}, err
-	}
-	for line := range strings.SplitSeq(string(data), "\n") {
-		if v, found := strings.CutPrefix(line, "btime "); found {
-			secs, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
-			if err != nil {
-				return time.Time{}, fmt.Errorf("parse btime: %w", err)
-			}
-			return time.Unix(secs, 0), nil
-		}
-	}
-	return time.Time{}, errors.New("btime missing from " + path)
 }
