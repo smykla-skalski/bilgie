@@ -58,8 +58,9 @@ type markerResult struct {
 // repository. Both protect alike, so no file is ever opened. The walk lists
 // directory names only, with no stat per file, goes breadth first so shallow
 // hits come first, never follows symlinks, stops at the first hit, and fails
-// closed when the limits, a read error or ctx stop it before the tree is
-// verified.
+// closed when the limits, a read error on the root or ctx stop it before the
+// tree is verified. A subdirectory refused with a permission error (macOS
+// TCC) is skipped, so a .git below it goes unseen.
 func findGitMarker(ctx context.Context, root string, lim scanLimits) markerResult {
 	parent := ctx
 	if lim.timeout > 0 {
@@ -77,7 +78,7 @@ func findGitMarker(ctx context.Context, root string, lim scanLimits) markerResul
 			if dirs > lim.dirs {
 				return markerResult{outcome: markerTooLarge}
 			}
-			listing := listDir(ctx, parent, dir, lim.entries-entries, lim.dirs-dirs-len(next), depth < lim.depth)
+			listing := listDir(ctx, parent, dir, lim.entries-entries, lim.dirs-dirs-len(next), depth < lim.depth, depth == 0)
 			if listing.outcome != markerNone {
 				return listing.markerResult
 			}
@@ -101,13 +102,17 @@ type dirListing struct {
 
 // listDir reads one directory in batches, so a directory with hundreds of
 // thousands of files is never held in memory whole, and returns at the first
-// .git entry. budget is the number of names still allowed.
-func listDir(ctx, parent context.Context, dir string, budget, dirBudget int, wantSubdirs bool) dirListing {
+// .git entry. budget is the number of names still allowed. A permission error
+// skips a subdirectory but never the root.
+func listDir(ctx, parent context.Context, dir string, budget, dirBudget int, wantSubdirs, isRoot bool) dirListing {
 	f, err := openDir(dir)
 	if errors.Is(err, fs.ErrNotExist) {
 		return dirListing{}
 	}
 	if err != nil {
+		if !isRoot && errors.Is(err, fs.ErrPermission) {
+			return dirListing{}
+		}
 		return dirListing{markerResult: markerResult{outcome: markerUnreadable, detail: "cannot verify: " + dir}}
 	}
 	defer func() { _ = f.Close() }()
@@ -141,6 +146,9 @@ func listDir(ctx, parent context.Context, dir string, budget, dirBudget int, wan
 			return out
 		}
 		if readErr != nil {
+			if !isRoot && errors.Is(readErr, fs.ErrPermission) {
+				return out
+			}
 			return dirListing{markerResult: markerResult{outcome: markerUnreadable, detail: "cannot verify: " + dir}}
 		}
 	}
