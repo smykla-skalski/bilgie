@@ -137,6 +137,9 @@ func (l *Loader) Load() (*Config, error) {
 		if l.v.IsSet("providers." + name + ".clean_timeout") {
 			merged.CleanTimeout = userP.CleanTimeout
 		}
+		if l.v.IsSet("providers." + name + ".uvx_min_age") {
+			merged.UvxMinAge = userP.UvxMinAge
+		}
 		l.mergePaths(&merged, name, userP.Paths)
 		if l.v.IsSet("providers." + name + ".enabled") {
 			merged.Enabled = userP.Enabled

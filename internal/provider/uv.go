@@ -29,8 +29,11 @@ const (
 // UVProvider cleans the uv cache with uv itself. Files inside the cache
 // reference each other (the wheels-v* pointers name archive-v0/<id>), so
 // deleting any of them breaks the next install; only uv may remove them.
-// bilgie never deletes below the cache directory. Smart mode runs
-// `uv cache prune` (unused entries), full mode runs `uv cache clean`.
+// bilgie never deletes below the cache directory, with one exception: while
+// a long-running uvx server holds the cache lock, uv cannot run safely, and
+// the provider removes only the cached environments no process uses (see
+// sweepEnvironments). Smart mode runs `uv cache prune` (unused entries), full
+// mode runs `uv cache clean`.
 type UVProvider struct {
 	*BaseProvider
 	dir      string
@@ -38,6 +41,12 @@ type UVProvider struct {
 	cleanCmd string
 	fullArgs []string
 	timeout  time.Duration
+	// uvxMinAge is how old a uvx server must be before it stops blocking uv.
+	uvxMinAge time.Duration
+
+	// processEnvs and openUnder read what running processes use; tests replace them.
+	processEnvs func(context.Context) ([]osshim.ProcessEnv, error)
+	openUnder   func(context.Context, []string) (map[string]bool, error)
 
 	// lockPath is bilgie's own lock on running uv; empty uses the state dir.
 	lockPath string
@@ -62,6 +71,10 @@ func NewUVProvider(name string, cfg config.Provider) (*UVProvider, error) {
 	if err != nil {
 		return nil, err
 	}
+	uvxMinAge, err := config.ParseUvxMinAge(cfg.UvxMinAge)
+	if err != nil {
+		return nil, fmt.Errorf("parse uvx_min_age: %w", err)
+	}
 	dir, err := config.ResolveUVCacheDir(cfg.Paths)
 	if err != nil {
 		return nil, err
@@ -78,6 +91,9 @@ func NewUVProvider(name string, cfg config.Provider) (*UVProvider, error) {
 		cleanCmd:     cmd,
 		fullArgs:     fullArgs,
 		timeout:      timeout,
+		uvxMinAge:    uvxMinAge,
+		processEnvs:  osshim.ProcessEnvironments,
+		openUnder:    osshim.OpenFilesUnder,
 	}
 	p.protected = expandProtected(config.DefaultProtected(), home)
 	p.protected = append(p.protected, config.BuiltinProtectedRoots(home)...)
@@ -144,8 +160,12 @@ func (p *UVProvider) Clean(ctx context.Context, opts CleanOptions) (CleanResult,
 		}
 		defer release()
 	}
-	if skipped, ok := p.skipIfBusy(ctx); ok {
-		return skipped, nil
+	verdict := p.busy.classifyUV(ctx, p.uvxMinAge)
+	if verdict.busy != "" && ctx.Err() == nil {
+		return skipResult(verdict.busy), nil
+	}
+	if len(verdict.aged) > 0 && ctx.Err() == nil {
+		return p.sweepEnvironments(ctx, opts, verdict.aged)
 	}
 	bin, found := p.findUV()
 	if !found {

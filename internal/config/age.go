@@ -58,6 +58,7 @@ func (c *Config) ValidateAges() error {
 			{"min_idle", p.MinIdle},
 			{"critical_min_idle", p.CriticalMinIdle},
 			{"emergency_min_idle", p.EmergencyMinIdle},
+			{"uvx_min_age", p.UvxMinAge},
 		} {
 			if strings.TrimSpace(f.value) == "" {
 				continue
