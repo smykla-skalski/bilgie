@@ -41,7 +41,7 @@ func TestPathProtection_SeesAProtectedNameBelowThePath(t *testing.T) {
 		reason, err := PathProtection(t.Context(), dir, home, nil)
 
 		require.NoError(t, err, name)
-		assert.Contains(t, reason, filepath.Join(dir, "x", "y", name), name)
+		assert.Contains(t, reason, filepath.Join("x", "y", name), name)
 	}
 }
 

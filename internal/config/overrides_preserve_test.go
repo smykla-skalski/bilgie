@@ -136,3 +136,12 @@ func TestWriteOverrides_ParallelWritersKeepEveryProvider(t *testing.T) {
 		assert.NotContains(t, e.Name(), ".tmp-", "temp file left behind")
 	}
 }
+
+func TestUnlocked_OnlyAPermissionErrorLeavesTheWriteUnlocked(t *testing.T) {
+	release, err := unlocked(fmt.Errorf("open: %w", os.ErrPermission))
+	require.NoError(t, err)
+	release()
+
+	_, err = unlocked(os.ErrInvalid)
+	require.ErrorIs(t, err, os.ErrInvalid)
+}
