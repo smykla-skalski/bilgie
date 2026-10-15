@@ -109,6 +109,7 @@ func TestDefaultProviders_SailE2EDirs(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, TypeDirPattern, p.Type)
 	assert.False(t, p.Enabled, "whole-directory sweeps are opt-in")
+	assert.Equal(t, SweepTierCritical, p.SweepTier)
 	assert.Equal(t, []string{"~/Library/Caches/dev.smykla.sail.e2e.*"}, p.Paths)
 	require.NoError(t, p.DirPatternError())
 }

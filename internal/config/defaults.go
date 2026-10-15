@@ -317,9 +317,9 @@ func DefaultConfigFor(p Platform) *Config {
 
 // tempDirProviders delete whole directories, so they stay disabled until the
 // user enables them. auto still sweeps the disabled ones under disk pressure:
-// sail-dirs from the critical tier (it reclaims the largest recurring scratch
-// roots; min_idle and the open-file, .git and owner-marker checks guard it),
-// the others only at the emergency tier.
+// sail-dirs and sail-e2e-dirs from the critical tier (they reclaim the largest
+// recurring scratch roots; min_idle and the open-file and .git checks guard
+// them), the others only at the emergency tier.
 func tempDirProviders(p Platform) map[string]Provider {
 	return map[string]Provider{
 		"sail-dirs": {
@@ -339,11 +339,12 @@ func tempDirProviders(p Platform) map[string]Provider {
 			OwnerMarker: true,
 		},
 		"sail-e2e-dirs": {
-			Enabled: false,
-			Type:    TypeDirPattern,
-			Paths:   []string{p.cache("dev.smykla.sail.e2e.*")},
-			MaxSize: "5G",
-			MinIdle: "2h",
+			Enabled:   false,
+			Type:      TypeDirPattern,
+			Paths:     []string{p.cache("dev.smykla.sail.e2e.*")},
+			MaxSize:   "5G",
+			MinIdle:   "2h",
+			SweepTier: SweepTierCritical,
 		},
 	}
 }
