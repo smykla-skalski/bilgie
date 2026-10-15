@@ -318,6 +318,11 @@ type Provider struct {
 	// SkipPrefixes lists entry-name prefixes that whole-entry providers never evict.
 	SkipPrefixes []string `mapstructure:"skip_prefixes" yaml:"skip_prefixes,omitempty"`
 
+	// UvxMinAge is how old a running uvx process must be before the uv provider
+	// stops treating it as a blocker and sweeps only the cached environments no
+	// running process uses (default 1h; uv provider only).
+	UvxMinAge string `mapstructure:"uvx_min_age" yaml:"uvx_min_age,omitempty"`
+
 	// MaxDepth bounds how deep project-artifacts looks below each root (default 4).
 	MaxDepth int `mapstructure:"max_depth" yaml:"max_depth,omitempty"`
 	// TrimIdle is how long a Rust build unit must go unused before project-artifacts
@@ -445,6 +450,9 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("provider %q: %w", name, err)
 			}
 		}
+		if err := p.validateUvxMinAge(name); err != nil {
+			return err
+		}
 		if p.CleanTimeout != "" {
 			if strings.TrimSpace(p.CleanTimeout) == "" {
 				return fmt.Errorf("provider %q: clean_timeout must not be blank", name)
@@ -471,6 +479,33 @@ func (c *Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+// DefaultUvxMinAge is how long a uvx process runs before the uv provider
+// stops treating it as a blocker.
+const DefaultUvxMinAge = time.Hour
+
+// validateUvxMinAge rejects a uvx_min_age on any provider but uv, and a value
+// that is blank or does not parse.
+func (p Provider) validateUvxMinAge(name string) error {
+	if p.UvxMinAge == "" {
+		return nil
+	}
+	if name != uvProvider {
+		return fmt.Errorf("provider %q: uvx_min_age is only valid for the uv provider", name)
+	}
+	if _, err := ParseUvxMinAge(p.UvxMinAge); err != nil {
+		return fmt.Errorf("provider %q: uvx_min_age: %w", name, err)
+	}
+	return nil
+}
+
+// ParseUvxMinAge parses uvx_min_age; an empty value is DefaultUvxMinAge.
+func ParseUvxMinAge(s string) (time.Duration, error) {
+	if strings.TrimSpace(s) == "" {
+		return DefaultUvxMinAge, nil
+	}
+	return ParseDuration(s)
 }
 
 // validateProjectArtifacts checks the project-artifacts settings.

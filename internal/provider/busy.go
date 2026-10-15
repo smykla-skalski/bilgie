@@ -69,6 +69,7 @@ type busyGuard struct {
 
 	listProcesses func(ctx context.Context) ([]osshim.Process, error)
 	lockHeld      func(path string) (bool, error)
+	lockHolders   func(ctx context.Context, path string) ([]int, error)
 	now           func() time.Time
 }
 
@@ -98,6 +99,7 @@ func newBusyGuard(name string, paths []string) *busyGuard {
 		aging:         busyAgedCommands[name],
 		listProcesses: processTableLister(procs),
 		lockHeld:      osshim.LockHeld,
+		lockHolders:   osshim.FileHolders,
 		now:           time.Now,
 	}
 }

@@ -625,6 +625,7 @@ providers:
 | `type` | `dir-pattern` removes whole stale directories matching a glob in `paths`; `project-artifacts` removes build artifacts of idle projects found below the roots in `paths` |
 | `min_idle` | `dir-pattern`: minimum idle time, from the newest mtime in the tree (default `2h`); `project-artifacts`: project idle time (default `7d`); units `m`, `h`, `d`, minimum `1m` |
 | `trim_idle` | `project-artifacts`: Rust build units (`.fingerprint`, `build`, `deps`, `incremental`) unused for this long are removed from the `target/` of an active project; a profile whose `.cargo-lock` is held is skipped, and dry-run lists the bytes it would trim (default `30d`; units `m`, `h`, `d`, minimum `1m`) |
+| `uvx_min_age` | `uv`: how long a `uvx` server must have run before it stops blocking the provider; bilgie then removes only the cached environments no process uses and never runs uv (default `1h`; units `m`, `h`, `d`, minimum `1m`) |
 | `skip_if_open` | `dir-pattern`, `project-artifacts`: skip directories with open files via `lsof +D` (default `true`) |
 | `owner_marker` | `dir-pattern`: only sweep matches that carry an owner marker file (default `false`; `agent-scratch-dirs` sets `true`) |
 | `sweep_tier` | `dir-pattern`: tier from which `auto` sweeps the provider while it is disabled, `critical` or `emergency` (default `emergency`; `sail-dirs` sets `critical`) |
@@ -698,7 +699,8 @@ Dot entries are ignored. In full mode providers with a `clean_cmd` run it.
 ### uv
 
 `uv` is a command-managed provider: uv decides what goes, bilgie never deletes a file in the uv
-cache. The `wheels-v*` pointer files reference `archive-v0/<id>`, so removing either side makes
+cache, with one exception while a long-running `uvx` server holds the cache (see
+[Long-running uvx servers](#long-running-uvx-servers)). The `wheels-v*` pointer files reference `archive-v0/<id>`, so removing either side makes
 the next install fail with `failed to read directory .../archive-v0/<id>`.
 
 `uv` is off by default until a few safety follow-ups land. Enable it with `providers.uv.enabled: true`.
@@ -725,7 +727,45 @@ from a deliberate choice, so set `enabled: false` to turn it off in an existing 
   `clean_cmd` keep working. `clean_cmd` may only be `uv cache clean`, `uv cache prune` or `uv cache prune --ci`
   (a prune command also serves smart mode, so `--ci` applies there too; a clean command only replaces the full-mode default); anything else fails to load with
   `provider uv: clean_cmd must be ...`, so remove it.
-- Busy guard: skipped while `<path>/.lock` is flock-held or a `uv` process runs.
+- Busy guard: skipped while `<path>/.lock` is flock-held or a `uv` process runs, except for `uvx` servers
+  that have run for `uvx_min_age` (default `1h`, below).
+
+#### Long-running uvx servers
+
+`uvx` servers (for example MCP servers started with `uvx some-mcp`) keep a `uv` process alive for
+as long as they run, and that process holds the cache `.lock` for its whole life. `uv cache prune`
+waits on the lock. `uv cache prune --force` skips the wait but removes every cached environment,
+including the one a running server imports its modules from, so the server fails on its next
+import. bilgie never passes `--force`.
+
+A `uvx` server that has run for `uvx_min_age` (default `1h`, same units and `1m` minimum as
+`max_age`) and holds this cache's lock stops blocking the provider. While one is running bilgie does
+not run uv at all and instead sweeps the cached environments no process uses:
+
+- Only the environment symlinks under `environments-v*/<bucket>` that point at a virtual
+  environment directly under `archive-v0`, and those directories, are removed. This is the part of
+  the cache `uv cache prune` drops as stale, and the bulk of a cache that backs many `uvx` runs.
+  Wheel archives, `wheels-v*`, `sdists-v*`, `simple-v*` and `git-v*` stay until a run without a
+  running `uvx` server lets uv prune them.
+- An environment is kept when any process names it on its command line or in its environment
+  (`uvx` puts the environment first on `PATH`), or has a file in it open, mapped or as its working
+  directory (`lsof`, or `/proc` on Linux). Paths are matched in both spellings of the cache
+  directory.
+- If a server holding the lock has no process below it that visibly runs from this cache, bilgie
+  cannot tell which environment it uses and removes nothing. The same happens when the process
+  table, the process environments or the open files cannot be read, and on Windows.
+- Each environment is unpublished first (its symlink is removed, so a `uv` that starts now rebuilds
+  it) and checked again before the directory is deleted. A use or a new `uv` process that shows up in
+  between puts the symlink back and keeps the environment.
+- A `uv` process that is not such a server, a `uvx` younger than `uvx_min_age` and a lock held by
+  anything else still block as before. A `uvx` server that does not hold this cache's lock uses another
+  cache and is ignored.
+- `--dry-run` lists the environments it would remove and the bytes it would free.
+
+Trade-off: the sweep reclaims less than a prune, and a `uv` that starts in the milliseconds
+between the second check and the removal can fail to start (it never breaks a running process). Set
+`uvx_min_age` to a very large value, for example `3650d`, to restore the old behavior of skipping
+whenever any `uvx` runs.
 
 ### sqlite-compact
 
@@ -811,7 +851,7 @@ failure. If the check itself fails, the provider is skipped too.
 | `gradle` | a `gradle` or `gradlew` process, or a Gradle daemon, runs |
 | `homebrew` | a `brew` process runs |
 | `yarn` | a `yarn` process runs (`yarn`, `yarn.js`, `yarnpkg`; any OS) |
-| `uv` | `<path>/.lock` is flock-held, or a `uv` process runs |
+| `uv` | `<path>/.lock` is flock-held, or a `uv` process runs, except a `uvx` server up for `uvx_min_age` (default `1h`) that holds the lock: bilgie then sweeps only the cached environments no process uses (see [uv](#uv)) |
 | `mise` | a `mise` process runs `install`, `upgrade`, `prune` or `use` |
 
 A `go run` or `go test` process stays alive for as long as the program or test
