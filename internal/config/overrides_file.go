@@ -90,12 +90,16 @@ func withoutLock(error) (func(), error) {
 
 // writeAtomic replaces target with data through a temp file in the same
 // directory, so a reader or a crash never sees half a file. The mode of an
-// existing file is kept. In a directory the user cannot add files to, the
+// existing file is kept, and a file its owner cannot write is refused, as a
+// plain write would. In a directory the user cannot add files to, the
 // file is rewritten in place instead.
 func writeAtomic(target string, data []byte) (err error) {
 	mode := os.FileMode(0o600)
 	if info, statErr := os.Stat(target); statErr == nil {
 		mode = info.Mode().Perm()
+	}
+	if mode&0o200 == 0 {
+		return fmt.Errorf("open %s: %w", target, os.ErrPermission)
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(target), "."+filepath.Base(target)+".tmp-*")
 	if errors.Is(err, os.ErrPermission) {

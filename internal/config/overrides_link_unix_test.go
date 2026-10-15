@@ -123,3 +123,20 @@ func TestWriteOverrides_KeepsNoLockFileNextToTheConfig(t *testing.T) {
 	require.Len(t, entries, 1)
 	assert.Equal(t, "config.yaml", entries[0].Name())
 }
+
+func TestWriteOverrides_RefusesAReadOnlyConfig(t *testing.T) {
+	content := "providers:\n  npm:\n    enabled: false\n"
+	loader, path := overridesLoader(t, content)
+	require.NoError(t, os.Chmod(path, 0o400))
+	if f, err := os.OpenFile(path, os.O_WRONLY, 0); err == nil {
+		_ = f.Close()
+		t.Skip("file permissions are not enforced here")
+	}
+
+	_, err := loader.WriteOverrides([]Override{{Name: "npm"}})
+
+	require.ErrorIs(t, err, os.ErrPermission)
+	data, readErr := os.ReadFile(path)
+	require.NoError(t, readErr)
+	assert.Equal(t, content, string(data))
+}
