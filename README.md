@@ -749,8 +749,9 @@ not run uv at all and instead sweeps the cached environments no process uses:
   running `uvx` server lets uv prune them.
 - An environment is kept when any process names it on its command line or in its environment
   (`uvx` puts the environment first on `PATH`), or has a file in it open, mapped or as its working
-  directory (`lsof`, or `/proc` on Linux). Paths are matched in both spellings of the cache
-  directory.
+  directory (`lsof`, or `/proc` on Linux). Paths are matched as spelled and with every
+  symlink in the cache directory resolved, so a cache reached through `/tmp`, a symlinked home or
+  any other alias is matched however a process spells it.
 - If a server holding the lock has no process below it that visibly runs from this cache, bilgie
   cannot tell which environment it uses and removes nothing. The same happens when the process
   table, the process environments or the open files cannot be read, and on Windows.

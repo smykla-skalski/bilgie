@@ -38,6 +38,11 @@ type uvxEvidence struct {
 	procs []osshim.Process
 	envs  []osshim.ProcessEnv
 	open  map[string]bool
+	// resolver and resolved hold the paths processes name with every symlink
+	// resolved, so any alias of an environment compares equal to it.
+	resolver *pathResolver
+	resolved []string
+	seen     map[string]bool
 	// texts holds every command line and environment, normalized for path
 	// matching.
 	texts []string
@@ -218,6 +223,7 @@ func (p *UVProvider) cachedEnvironments() ([]uvEnv, error) {
 		return nil, err
 	}
 	archive := filepath.Join(p.dir, uvArchiveDir)
+	resolvedArchive, archiveResolves := newPathResolver().resolve(archive)
 	var envs []uvEnv
 	for _, root := range roots {
 		if !root.IsDir() || !strings.HasPrefix(root.Name(), uvEnvDirPrefix) {
@@ -251,7 +257,11 @@ func (p *UVProvider) cachedEnvironments() ([]uvEnv, error) {
 				}
 				payload = filepath.Clean(payload)
 				if filepath.Dir(payload) != archive {
-					continue
+					parent, ok := newPathResolver().resolve(filepath.Dir(payload))
+					if !archiveResolves || !ok || parent != resolvedArchive {
+						continue
+					}
+					payload = filepath.Join(archive, filepath.Base(payload))
 				}
 				if _, err := os.Stat(filepath.Join(payload, uvVenvMarker)); err != nil {
 					continue
@@ -267,7 +277,7 @@ func (p *UVProvider) cachedEnvironments() ([]uvEnv, error) {
 // open files under each environment. Any failure is an error: the caller then
 // keeps every environment.
 func (p *UVProvider) gatherEvidence(ctx context.Context, envs []uvEnv) (uvxEvidence, error) {
-	var ev uvxEvidence
+	ev := uvxEvidence{resolver: newPathResolver(), seen: map[string]bool{}}
 	var err error
 	if ev.procs, err = p.busy.listProcesses(ctx); err != nil {
 		return ev, fmt.Errorf("list processes: %w", err)
@@ -283,18 +293,33 @@ func (p *UVProvider) gatherEvidence(ctx context.Context, envs []uvEnv) (uvxEvide
 		return ev, fmt.Errorf("list open files: %w", err)
 	}
 	for i := range ev.procs {
-		ev.texts = append(ev.texts, normalizeText(ev.procs[i].CommandLine))
+		ev.addText(ev.procs[i].CommandLine)
 	}
 	for i := range ev.envs {
-		ev.texts = append(ev.texts, normalizeText(ev.envs[i].Text))
+		ev.addText(ev.envs[i].Text)
 	}
 	return ev, nil
+}
+
+func (ev *uvxEvidence) addText(text string) {
+	ev.texts = append(ev.texts, normalizeText(text))
+	for _, path := range ev.resolver.resolvedPaths(text) {
+		if !ev.seen[path] {
+			ev.seen[path] = true
+			ev.resolved = append(ev.resolved, path)
+		}
+	}
 }
 
 // referenced reports whether any process uses the environment.
 func (p *UVProvider) referenced(env uvEnv, ev uvxEvidence) bool {
 	if ev.open[env.payload] {
 		return true
+	}
+	for _, target := range p.envTargets(env, ev.resolver) {
+		if anyWithin(ev.resolved, target) {
+			return true
+		}
 	}
 	needles := p.envNeedles(env)
 	for _, text := range ev.texts {
@@ -322,6 +347,34 @@ func (p *UVProvider) envNeedles(env uvEnv) []string {
 		}
 	}
 	return out
+}
+
+// envTargets are the resolved spellings of an environment: its directory,
+// and its link, which no longer resolves once the sweep has removed it.
+func (p *UVProvider) envTargets(env uvEnv, resolver *pathResolver) []string {
+	targets := []string{p.resolvedOrRaw(resolver, env.payload)}
+	parent := p.resolvedOrRaw(resolver, filepath.Dir(env.link))
+	return append(targets, normalizeText(filepath.Join(parent, filepath.Base(env.link))))
+}
+
+func (p *UVProvider) resolvedOrRaw(resolver *pathResolver, path string) string {
+	if resolved, ok := resolver.resolve(path); ok {
+		return normalizeText(resolved)
+	}
+	return normalizeText(path)
+}
+
+// anyWithin reports whether any of paths is target or lies inside it. The
+// path must end there: an id that merely starts with target's last element
+// is another directory.
+func anyWithin(paths []string, target string) bool {
+	for _, path := range paths {
+		if strings.HasPrefix(path, target) &&
+			(len(path) == len(target) || !idByte(path[len(target)])) {
+			return true
+		}
+	}
+	return false
 }
 
 // unattributed returns a reason when some aged uvx process has no descendant
@@ -390,7 +443,7 @@ func (p *UVProvider) cacheUsers(ctx context.Context, others []osshim.Process) ([
 	if err != nil {
 		return nil, fmt.Errorf("read process environments: %w", err)
 	}
-	ev := uvxEvidence{procs: procs, envs: envs}
+	ev := uvxEvidence{procs: procs, envs: envs, resolver: newPathResolver()}
 	prefixes := p.cachePrefixes()
 	var users []osshim.Process
 	for i := range others {
@@ -412,15 +465,23 @@ func (p *UVProvider) cachePrefixes() []string {
 }
 
 // runsFromCache reports whether a process below pid names a path inside the
-// cache's archive directory on its command line or in its environment.
+// cache's archive directory on its command line or in its environment,
+// whichever alias it spells it with.
 func (p *UVProvider) runsFromCache(pid int, ev uvxEvidence, prefixes []string) bool {
 	envText := make(map[int]string, len(ev.envs))
 	for i := range ev.envs {
 		envText[ev.envs[i].PID] += " " + ev.envs[i].Text
 	}
+	archive := p.resolvedOrRaw(ev.resolver, filepath.Join(p.dir, uvArchiveDir)) + string(filepath.Separator)
 	for _, id := range descendants(ev.procs, pid) {
-		if mentionsAny(normalizeText(envText[id]+" "+procText(ev.procs, id)), prefixes) {
+		text := envText[id] + " " + procText(ev.procs, id)
+		if mentionsAny(normalizeText(text), prefixes) {
 			return true
+		}
+		for _, path := range ev.resolver.resolvedPaths(text) {
+			if strings.HasPrefix(path, archive) {
+				return true
+			}
 		}
 	}
 	return false
