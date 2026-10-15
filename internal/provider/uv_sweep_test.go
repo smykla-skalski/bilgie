@@ -491,7 +491,7 @@ func TestUVProvider_LockHeldByAnotherProcessStillBlocks(t *testing.T) {
 
 	res, err := f.p.Clean(context.Background(), CleanOptions{Mode: CleanModeSmart})
 	require.NoError(t, err)
-	assert.Equal(t, "lock held: "+filepath.Join(f.dir, ".lock")+" (pid 800)", res.SkipReason)
+	assert.Equal(t, "lock held: "+filepath.Join(f.dir, ".lock"), res.SkipReason)
 	f.requireIntact(t, envA, envB)
 }
 

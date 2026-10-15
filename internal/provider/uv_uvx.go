@@ -79,7 +79,7 @@ func (g *busyGuard) classifyUV(ctx context.Context, minAge time.Duration) uvxVer
 	for _, pid := range holders {
 		i := slices.IndexFunc(servers, func(p osshim.Process) bool { return p.PID == pid })
 		if i < 0 {
-			return uvxVerdict{busy: fmt.Sprintf("lock held: %s (pid %d)", heldPath, pid)}
+			return uvxVerdict{busy: "lock held: " + heldPath}
 		}
 		aged = append(aged, servers[i])
 	}
