@@ -136,6 +136,13 @@ func TestDiagnose_Findings(t *testing.T) {
 		}, "trend", "-5.0 GiB over 2d", "", OK},
 		{"disabled providers", func(in *Input) { in.Cfg = testConfig("gradle", "yarn") },
 			"config", "2 provider(s) disabled: gradle, yarn", "", Note},
+		{"disabled sweeps", func(in *Input) {
+			in.Cfg = testConfig()
+			in.Cfg.Providers["sail-dirs"] = config.Provider{Type: config.TypeDirPattern, SweepTier: config.SweepTierCritical}
+			in.Cfg.Providers["agent-scratch-dirs"] = config.Provider{Type: config.TypeDirPattern}
+			in.Cfg.Providers["enabled-dirs"] = config.Provider{Type: config.TypeDirPattern, Enabled: true}
+		}, "sweeps", "disabled but swept under disk pressure: agent-scratch-dirs (emergency), sail-dirs (critical)",
+			"sweep_tier: emergency", Note},
 		{"protected conflict", func(in *Input) {
 			in.Conflicts = []auto.Conflict{{Provider: "go", Reason: "protected path /home/u/Downloads/go"}}
 		}, "config", "go: protected path /home/u/Downloads/go; auto never cleans it", "providers.go.enabled: false", Warn},

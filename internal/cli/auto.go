@@ -31,9 +31,10 @@ var AutoCmd = &cobra.Command{
   ok         free space at or above the low threshold: smart-trim only providers over their limit
   low        below max(min_free, min(min_free_pct of the volume, min_free_cap)): smart-trim every
              enabled provider, cheapest to rebuild first, stopping once free space recovers
-  critical   below critical_free (default 10G): the same trim, scheduled at the short cooldown
-  emergency  below emergency_free (default 5G): also sweep stale directories (dir-pattern
-             providers, even when disabled)
+  critical   below critical_free (default 10G): the same trim, scheduled at the short cooldown,
+             with the sail-dirs sweep first (sweep_tier: critical, even when disabled)
+  emergency  below emergency_free (default 5G): also sweep every other stale directory
+             (dir-pattern providers, even when disabled)
 
 The docker-volumes and xcode-archives providers never run. Providers pointing at Downloads, opencode
 or worktrees are skipped. The first run after install-agent is a dry-run.`,

@@ -315,16 +315,20 @@ func DefaultConfigFor(p Platform) *Config {
 	}
 }
 
-// tempDirProviders are opt-in: they delete whole directories, so they stay
-// disabled until the user enables them.
+// tempDirProviders delete whole directories, so they stay disabled until the
+// user enables them. auto still sweeps the disabled ones under disk pressure:
+// sail-dirs from the critical tier (it reclaims the largest recurring scratch
+// roots; min_idle and the open-file, .git and owner-marker checks guard it),
+// the others only at the emergency tier.
 func tempDirProviders(p Platform) map[string]Provider {
 	return map[string]Provider{
 		"sail-dirs": {
-			Enabled: false,
-			Type:    TypeDirPattern,
-			Paths:   p.tempGlobs("sail*"),
-			MaxSize: "20G",
-			MinIdle: "2h",
+			Enabled:   false,
+			Type:      TypeDirPattern,
+			Paths:     p.tempGlobs("sail*"),
+			MaxSize:   "20G",
+			MinIdle:   "2h",
+			SweepTier: SweepTierCritical,
 		},
 		"agent-scratch-dirs": {
 			Enabled:     false,

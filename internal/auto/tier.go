@@ -13,7 +13,8 @@ import (
 
 // Tier is the disk-pressure level: TierOK trims only providers over their
 // limit, TierLow trims every enabled provider, TierCritical does the same at
-// a shorter cooldown, TierEmergency also sweeps stale directories.
+// a shorter cooldown and sweeps the stale directories of providers whose
+// sweep_tier is critical, TierEmergency sweeps all stale directories.
 type Tier int
 
 // Pressure tiers, lowest to highest.

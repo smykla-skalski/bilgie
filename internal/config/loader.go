@@ -156,6 +156,9 @@ func (l *Loader) Load() (*Config, error) {
 		if l.v.IsSet("providers." + name + ".owner_marker") {
 			merged.OwnerMarker = userP.OwnerMarker
 		}
+		if l.v.IsSet("providers." + name + ".sweep_tier") {
+			merged.SweepTier = userP.SweepTier
+		}
 		mergeProjectArtifacts(l, name, &merged, &userP)
 		// Union, never replace: an empty user list must not strip protections.
 		if l.v.IsSet("providers." + name + ".skip_prefixes") {

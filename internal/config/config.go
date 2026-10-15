@@ -92,7 +92,7 @@ type Auto struct {
 	MinFreeCap string `mapstructure:"min_free_cap" yaml:"min_free_cap"`
 	// CriticalFree is the free space under which cleanup runs at the short cooldown (default 10G).
 	CriticalFree string `mapstructure:"critical_free" yaml:"critical_free"`
-	// EmergencyFree is the free space under which the stale-directory sweeps run (default 5G).
+	// EmergencyFree is the free space under which all the stale-directory sweeps run (default 5G).
 	EmergencyFree string `mapstructure:"emergency_free" yaml:"emergency_free"`
 	// Hysteresis is how far above a threshold free space must climb before the tier eases (default 2G).
 	Hysteresis string `mapstructure:"hysteresis" yaml:"hysteresis"`
@@ -312,6 +312,9 @@ type Provider struct {
 	// OwnerMarker limits a directory-pattern sweep to matches that carry an
 	// owner marker file, whatever their names.
 	OwnerMarker bool `mapstructure:"owner_marker" yaml:"owner_marker,omitempty"`
+	// SweepTier is the lowest pressure tier at which auto sweeps a disabled
+	// directory-pattern provider: "critical" or "emergency" (the default).
+	SweepTier string `mapstructure:"sweep_tier" yaml:"sweep_tier,omitempty"`
 	// SkipPrefixes lists entry-name prefixes that whole-entry providers never evict.
 	SkipPrefixes []string `mapstructure:"skip_prefixes" yaml:"skip_prefixes,omitempty"`
 
@@ -346,6 +349,18 @@ type Provider struct {
 // TypeDirPattern is the provider type that removes whole stale directories matching a glob.
 const TypeDirPattern = "dir-pattern"
 
+// Tiers at which auto sweeps a disabled directory-pattern provider.
+const (
+	SweepTierCritical  = "critical"
+	SweepTierEmergency = "emergency"
+)
+
+// SweepsAtCritical reports whether auto sweeps this provider from the
+// critical tier even while it is disabled.
+func (p Provider) SweepsAtCritical() bool {
+	return p.Type == TypeDirPattern && p.SweepTier == SweepTierCritical
+}
+
 // DirPatternError reports why a dir-pattern provider's own settings are
 // unusable: a path without a glob, a relative path or a bad min_idle. It
 // returns nil for other provider types.
@@ -377,6 +392,20 @@ const TypeProjectArtifacts = "project-artifacts"
 // MaxProjectDepth is the deepest max_depth accepted.
 const MaxProjectDepth = 16
 
+func (p Provider) validateSweepTier() error {
+	switch p.SweepTier {
+	case "":
+		return nil
+	case SweepTierCritical, SweepTierEmergency:
+		if p.Type != TypeDirPattern {
+			return fmt.Errorf("sweep_tier only applies to %s providers", TypeDirPattern)
+		}
+		return nil
+	default:
+		return fmt.Errorf("sweep_tier must be %q or %q, got %q", SweepTierCritical, SweepTierEmergency, p.SweepTier)
+	}
+}
+
 // Validate checks config for required fields.
 func (c *Config) Validate() error {
 	if err := c.Auto.Validate(); err != nil {
@@ -395,6 +424,9 @@ func (c *Config) Validate() error {
 		}
 		if p.Type != "" && p.Type != TypeDirPattern && p.Type != TypeProjectArtifacts {
 			return fmt.Errorf("provider %q: unknown type %q", name, p.Type)
+		}
+		if err := p.validateSweepTier(); err != nil {
+			return fmt.Errorf("provider %q: %w", name, err)
 		}
 		if p.Type == TypeDirPattern {
 			for _, path := range p.Paths {

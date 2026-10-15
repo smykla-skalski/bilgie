@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -44,6 +45,68 @@ func TestLoader_DefaultSailProviderStaysDisabled(t *testing.T) {
 	cfg, err := loader.Load()
 	require.NoError(t, err)
 	assert.False(t, cfg.Providers["sail-dirs"].Enabled)
+}
+
+func TestDefaultSailProviderSweepsFromCritical(t *testing.T) {
+	defaults := DefaultProvidersFor(Platform{OS: OSLinux, TempDir: "/tmp", SystemTempDir: "/tmp"})
+
+	sail := defaults["sail-dirs"]
+	assert.False(t, sail.Enabled, "off in status and clean until the user opts in")
+	assert.True(t, sail.SweepsAtCritical())
+	assert.Equal(t, "2h", sail.MinIdle)
+	assert.Nil(t, sail.SkipIfOpen, "unset guard keeps its safe default (on)")
+	assert.Nil(t, sail.SkipIfGitWorktree, "unset guard keeps its safe default (on)")
+	assert.False(t, sail.OwnerMarker)
+
+	for name, pc := range defaults {
+		if name != "sail-dirs" {
+			assert.False(t, pc.SweepsAtCritical(), "%s stays an emergency-tier sweep", name)
+		}
+	}
+}
+
+func TestLoader_SweepTier(t *testing.T) {
+	tests := []struct {
+		name     string
+		yaml     string
+		critical bool
+	}{
+		{"default is kept", "providers:\n  sail-dirs:\n    min_idle: 6h\n", true},
+		{"user can move it to emergency", "providers:\n  sail-dirs:\n    sweep_tier: emergency\n", false},
+		{"user can move another sweep to critical", "providers:\n  agent-scratch-dirs:\n    sweep_tier: critical\n", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "config.yaml")
+			require.NoError(t, os.WriteFile(configPath, []byte("version: \"1\"\n"+tt.yaml), 0o600))
+			loader := NewLoader()
+			loader.SetConfigPath(configPath)
+			loader.SetPlatform(Platform{OS: OSLinux, TempDir: t.TempDir()})
+
+			cfg, err := loader.Load()
+			require.NoError(t, err)
+
+			name := "sail-dirs"
+			if strings.Contains(tt.yaml, "agent-scratch-dirs") {
+				name = "agent-scratch-dirs"
+			}
+			assert.Equal(t, tt.critical, cfg.Providers[name].SweepsAtCritical())
+			assert.False(t, cfg.Providers[name].Enabled)
+		})
+	}
+}
+
+func TestConfig_Validate_SweepTier(t *testing.T) {
+	sweep := func(tier string, typ string) *Config {
+		return &Config{Providers: map[string]Provider{
+			"x": {Type: typ, Paths: []string{"/tmp/x*"}, MaxSize: "1G", SweepTier: tier},
+		}}
+	}
+	require.NoError(t, sweep("critical", TypeDirPattern).Validate())
+	require.NoError(t, sweep("emergency", TypeDirPattern).Validate())
+	require.NoError(t, sweep("", TypeDirPattern).Validate())
+	require.ErrorContains(t, sweep("low", TypeDirPattern).Validate(), `sweep_tier must be "critical" or "emergency"`)
+	require.ErrorContains(t, sweep("critical", "").Validate(), "sweep_tier only applies to dir-pattern")
 }
 
 func TestConfig_Validate_RejectsUnknownType(t *testing.T) {
