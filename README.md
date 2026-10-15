@@ -617,7 +617,7 @@ providers:
 | Field | Description |
 |-------|-------------|
 | `enabled` | Include in status/clean operations |
-| `paths` | Directories to scan (supports `~` expansion) |
+| `paths` | Directories to scan (supports `~` expansion). A path that is itself a symlink is not followed: it scans nothing, `status` shows `0 B` and `clean` reports no files, so point `paths` at the real directory |
 | `max_size` | Size limit (e.g., `10G`, `500M`) |
 | `max_age` | File age threshold for smart clean (e.g., `30d`); units `m`, `h`, `d`, minimum `1m` |
 | `clean_cmd` | Command for full clean (empty = file-based deletion) |
@@ -856,7 +856,8 @@ Sizes and freed bytes count each hard-linked file once, across all matched direc
 totals; a `dir-pattern` sweep reports a shared file as freed only when every link to it lies inside the removed directories, and duplicate patterns list a directory once. On Linux and macOS a file is identified by device and inode. On Windows by volume serial and file
 index (one extra open per file); if the identity cannot be read, every link counts in full, so the
 figure can only be too high. The age-based file trim lists each link on its own and still counts it
-separately.
+separately. Its age phase removes an expired file even when another link to the same inode, outside the
+provider paths, keeps the data alive; that removal frees nothing and is reported as freeing 0 bytes.
 
 The provider ignores
 `max_age` and removes every stale match whole regardless of `max_size`, which is

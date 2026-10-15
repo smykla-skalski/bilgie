@@ -903,3 +903,56 @@ func TestTreeProvider_DotDotSpellingHoldsTree(t *testing.T) {
 func TestFoldPath_KeepsPrefixGluedToPath(t *testing.T) {
 	assert.Contains(t, foldPath("tool --x=/a/../../home/u/cache"), "/home/u/cache")
 }
+
+func TestFoldPathSpaced_ResolvesDotDotAcrossASpace(t *testing.T) {
+	assert.Contains(t, foldPathSpaced("node /Users/John Smith/../Bob/cache/tree/x.js"), foldPath("/Users/Bob/cache/tree"))
+	assert.Equal(t, foldPath("/a/c"), foldPathSpaced("/a/b c/../c"))
+	assert.Equal(t, foldPath("/a/c"), foldPathSpaced("/a/b/d e/../../c"))
+	assert.Equal(t, foldPath("/a/b"), foldPathSpaced("/a/b c/../b"))
+}
+
+func TestTreeProvider_DotDotAfterSpacedDirectoryHoldsTree(t *testing.T) {
+	root := t.TempDir()
+	makePackage(t, filepath.Join(root, "_npx", "h2"), 5, 90*day)
+	inUse := filepath.Join(root, "_npx", "h3")
+	makePackage(t, inUse, 5, 80*day)
+	makePackage(t, filepath.Join(root, "_npx", "newest"), 5, 70*day)
+	p := newTree(t, "npm", config.Provider{Paths: []string{root}, MaxSize: "1", MaxAge: "30d"})
+	line := "node " + filepath.ToSlash(filepath.Join(root, "_npx", "John Smith")) + "/../h3/x.js"
+	p.procLines = func(context.Context) ([]string, error) { return []string{line}, nil }
+
+	_, err := p.Clean(context.Background(), CleanOptions{Mode: CleanModeSmart})
+	require.NoError(t, err)
+
+	assert.DirExists(t, inUse)
+}
+
+func TestFoldPathSpaced_KeepsWhatItCannotResolve(t *testing.T) {
+	assert.Equal(t, foldPath("/../a"), foldPathSpaced("/../a"))
+	assert.Equal(t, foldPath("/a/../.."), foldPathSpaced("/a/../.."))
+	assert.Equal(t, foldPath("x/..y"), foldPathSpaced("x/..y"))
+}
+
+func TestFoldPathSpaced_ResolvesDotDotBeforeASpace(t *testing.T) {
+	assert.Contains(t, foldPathSpaced("cd /a/b c/.. then /x"), foldPath("/a then"))
+}
+
+func TestFoldPathSpaced_StaysLinearOnLongLines(t *testing.T) {
+	line := "node " + strings.Repeat("/a", 100000) + strings.Repeat("/..", 100000)
+	start := time.Now()
+	foldPathSpaced(line)
+	assert.Less(t, time.Since(start), 2*time.Second)
+}
+
+func TestFoldPathSpaced_ResolvesDotDotAfterADotElement(t *testing.T) {
+	assert.Contains(t, foldPathSpaced("cmd /Users/me/My Dir/./../proj"), foldPath("/Users/me/proj"))
+	assert.Contains(t, foldPathSpaced("cmd /a/./b"), foldPath("/a/b"))
+}
+
+func TestFoldPathSpaced_StaysLinearOnRepeatedTails(t *testing.T) {
+	line := strings.Repeat("/a b/.. x", 100000)
+	start := time.Now()
+	got := foldPathSpaced(line)
+	assert.Less(t, time.Since(start), 2*time.Second)
+	assert.True(t, strings.HasPrefix(got, " x x x"), got[:20])
+}

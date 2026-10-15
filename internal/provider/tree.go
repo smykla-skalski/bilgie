@@ -328,6 +328,7 @@ func measureEntry(ctx context.Context, dir string, group int) (u treeUnit, unrea
 func (p *TreeProvider) markHeld(ctx context.Context, units []treeUnit) {
 	var (
 		lines     []string
+		folded    []foldedLine
 		listErr   error
 		listed    bool
 		idleSince = p.now().Add(-defaultMinIdle)
@@ -355,8 +356,14 @@ func (p *TreeProvider) markHeld(ctx context.Context, units []treeUnit) {
 			}
 			continue
 		}
-		for _, line := range lines {
-			if strings.Contains(foldPath(line), foldPath(u.path)) {
+		if folded == nil {
+			folded = make([]foldedLine, len(lines))
+			for i, line := range lines {
+				folded[i] = foldLine(line)
+			}
+		}
+		for _, line := range folded {
+			if line.names(u.path) {
 				u.hold = "in use by a running process"
 				break
 			}
@@ -639,18 +646,93 @@ func removeTree(dir string) error {
 // are unified, repeated ones and dot-dot elements resolved, and, on the case-insensitive Windows and macOS file systems,
 // so is the case.
 func foldPath(s string) string {
-	s = strings.ReplaceAll(s, `\`, "/")
+	return foldCaseOS(foldWords(unifySlashes(s)))
+}
+
+// foldPathSpaced is foldPath for a path with a space in a directory name: a
+// dot-dot element resolves against the whole directory name before it, not
+// only the last word. A command line matches when either fold matches, so this
+// can only hold more trees.
+func foldPathSpaced(s string) string {
+	return foldCaseOS(foldWords(resolveDotDot(unifySlashes(s))))
+}
+
+func unifySlashes(s string) string {
+	return strings.ReplaceAll(s, `\`, "/")
+}
+
+func foldWords(s string) string {
 	parts := strings.Split(s, " ")
 	for i, part := range parts {
 		if at := strings.Index(part, "/"); at >= 0 {
 			parts[i] = part[:at] + path.Clean(part[at:])
 		}
 	}
-	s = strings.Join(parts, " ")
+	return strings.Join(parts, " ")
+}
+
+func foldCaseOS(s string) string {
 	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
-		s = strings.ToLower(s)
+		return strings.ToLower(s)
 	}
 	return s
+}
+
+// resolveDotDot removes "<dir>/.." pairs where the directory name may hold
+// spaces, in one pass. A dot-dot with no directory before it is left for the
+// per-word fold.
+func resolveDotDot(s string) string {
+	type element struct {
+		text  string
+		tails []string
+	}
+	parts := strings.Split(collapseSlashes(s), "/")
+	out := []element{{text: parts[0]}}
+	for _, part := range parts[1:] {
+		if part == "." {
+			continue
+		}
+		tail, isDotDot := strings.CutPrefix(part, "..")
+		if isDotDot && (tail == "" || tail[0] == ' ') && len(out) > 1 {
+			if top := out[len(out)-1].text; top != "" && top != ".." {
+				out = out[:len(out)-1]
+				out[len(out)-1].tails = append(out[len(out)-1].tails, tail)
+				continue
+			}
+		}
+		out = append(out, element{text: part})
+	}
+	var b strings.Builder
+	for i, e := range out {
+		if i > 0 {
+			b.WriteByte('/')
+		}
+		b.WriteString(e.text)
+		for _, t := range e.tails {
+			b.WriteString(t)
+		}
+	}
+	return b.String()
+}
+
+func collapseSlashes(s string) string {
+	for strings.Contains(s, "//") {
+		s = strings.ReplaceAll(s, "//", "/")
+	}
+	return s
+}
+
+// foldedLine is a process command line folded once for every tree check.
+type foldedLine struct{ plain, spaced string }
+
+func foldLine(line string) foldedLine {
+	return foldedLine{plain: foldPath(line), spaced: foldPathSpaced(line)}
+}
+
+// names reports whether the command line names the tree dir.
+func (l foldedLine) names(dir string) bool {
+	want := foldPath(dir)
+	return strings.Contains(l.plain, want) || strings.Contains(l.spaced, want)
 }
 
 func firstMatch(lines, wanted []string) string {

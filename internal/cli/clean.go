@@ -12,6 +12,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/smykla-skalski/bilgie/internal/auto"
 	"github.com/smykla-skalski/bilgie/internal/config"
 	"github.com/smykla-skalski/bilgie/internal/provider"
 	"github.com/smykla-skalski/bilgie/internal/report"
@@ -139,19 +140,11 @@ func runCleanWithContext(newCtx func() (context.Context, context.CancelFunc), lo
 	return executeClean(ctx, providers, unavailable, opts, mode)
 }
 
-// volumesProvider is skipped by --all --smart: smart mode cannot bound a
-// volume prune, so it must be requested by name.
-const volumesProvider = "docker-volumes"
-
-// archivesProvider is skipped by --all: Xcode archives hold signed builds and
-// App Store dSYMs that cannot be regenerated, so it must be requested by name.
-const archivesProvider = "xcode-archives"
-
 // allProviders drops what --all must not run: archives always, volumes in
 // smart mode.
 func allProviders(names []string, smart bool) []string {
 	return slices.DeleteFunc(names, func(n string) bool {
-		return n == archivesProvider || (smart && n == volumesProvider)
+		return n == auto.ArchivesProvider || (smart && n == auto.VolumesProvider)
 	})
 }
 
@@ -385,9 +378,7 @@ func executeClean(
 			entry.Status = statusSkipped
 			entry.Reason = result.SkipReason
 			skips.add(p.Name(), result.SkipReason)
-			if text && (!skips.enabled || !dryRun) {
-				printSkipped(p.Name(), result.SkipReason, dryRun, quiet)
-			}
+			reportSkip(p.Name(), result, opts, skips.enabled)
 		case dryRun:
 			entry.Status = statusDryRun
 			switch {
@@ -505,6 +496,30 @@ func entryCount(result provider.CleanResult) string {
 		return ", 1 entry"
 	default:
 		return fmt.Sprintf(", %d entries", n)
+	}
+}
+
+// reportSkip prints a skipped provider; verbose output adds why each held
+// entry stays.
+func reportSkip(name string, result provider.CleanResult, opts cleanOptions, listed bool) {
+	if opts.json {
+		return
+	}
+	if !listed || !opts.dryRun {
+		printSkipped(name, result.SkipReason, opts.dryRun, opts.quiet)
+	}
+	if opts.verbose && !opts.quiet {
+		writeSkipLines(os.Stdout, result.Output)
+	}
+}
+
+// writeSkipLines prints the per-entry "skip:" lines of a provider's output,
+// which say why each held entry stays when the provider as a whole skipped.
+func writeSkipLines(w io.Writer, output string) {
+	for line := range strings.SplitSeq(output, "\n") {
+		if strings.HasPrefix(line, "skip: ") {
+			fmt.Fprintln(w, line)
+		}
 	}
 }
 

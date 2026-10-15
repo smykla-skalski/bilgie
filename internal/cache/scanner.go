@@ -192,11 +192,12 @@ func ListFilesContext(ctx context.Context, paths []string) (ListResult, error) {
 // distinctRoots drops paths that name the same place twice: equal after
 // symlinks are resolved, or inside another directory root of the list. A root
 // that is itself a symlink never absorbs others, because walking it visits
-// nothing. The result is ordered, so scans are deterministic.
+// nothing, and where a symlink root and a real one name the same file the
+// real one is kept. The result is ordered, so scans are deterministic.
 func distinctRoots(paths []string) []string {
 	type root struct {
 		path, key string
-		dir       bool
+		dir, link bool
 	}
 	roots := make([]root, 0, len(paths))
 	for _, p := range paths {
@@ -204,14 +205,15 @@ func distinctRoots(paths []string) []string {
 		if resolved, err := filepath.EvalSymlinks(p); err == nil {
 			key = resolved
 		}
-		isDir := false
+		var isDir, isLink bool
 		if info, err := os.Lstat(p); err == nil && info != nil {
 			isDir = info.IsDir()
+			isLink = info.Mode()&fs.ModeSymlink != 0
 		}
-		roots = append(roots, root{path: p, key: foldCase(key), dir: isDir})
+		roots = append(roots, root{path: p, key: foldCase(key), dir: isDir, link: isLink})
 	}
 	slices.SortFunc(roots, func(a, b root) int {
-		return cmp.Or(cmp.Compare(len(a.key), len(b.key)), strings.Compare(a.key, b.key), strings.Compare(a.path, b.path))
+		return cmp.Or(cmp.Compare(len(a.key), len(b.key)), strings.Compare(a.key, b.key), compareBool(a.link, b.link), strings.Compare(a.path, b.path))
 	})
 
 	var kept []root
@@ -244,4 +246,16 @@ func foldCase(p string) string {
 		return strings.ToLower(p)
 	}
 	return p
+}
+
+// compareBool orders false before true.
+func compareBool(a, b bool) int {
+	switch {
+	case a == b:
+		return 0
+	case b:
+		return -1
+	default:
+		return 1
+	}
 }

@@ -105,3 +105,34 @@ func TestRealCleanVerboseListsEntriesTheOutputOmits(t *testing.T) {
 	assert.Contains(t, out, "removed: /x/a")
 	assert.Contains(t, out, "removed: /x/b")
 }
+
+func TestRealCleanVerboseShowsWhyEachHeldEntryStays(t *testing.T) {
+	result := provider.CleanResult{
+		Output: "over limit (2.0 GiB > 1.0 GiB) but nothing is evictable\n" +
+			"skip: /x/a (in use by a running process)\nskip: /x/b (modified 3m0s ago)",
+		SkipReason:     "over limit but nothing is evictable",
+		SkippedEntries: 2,
+	}
+	run := func(opts cleanOptions) string {
+		var err error
+		out := captureStdout(t, func() {
+			err = executeClean(context.Background(), []provider.Provider{scriptedProvider{result}}, nil, opts, provider.CleanModeSmart)
+		})
+		require.NoError(t, err)
+		return out
+	}
+
+	verbose := run(cleanOptions{force: true, verbose: true})
+	assert.Contains(t, verbose, "skip: /x/a (in use by a running process)")
+	assert.Contains(t, verbose, "skip: /x/b (modified 3m0s ago)")
+	verboseDry := run(cleanOptions{dryRun: true, verbose: true})
+	assert.Contains(t, verboseDry, "skip: /x/a (in use by a running process)")
+
+	assert.NotContains(t, run(cleanOptions{force: true}), "skip: /x/a")
+	assert.NotContains(t, run(cleanOptions{force: true, verbose: true, quiet: true}), "skip: /x/a")
+
+	var parsed CleanOutput
+	require.NoError(t, json.Unmarshal([]byte(run(cleanOptions{force: true, verbose: true, json: true})), &parsed))
+	require.Len(t, parsed.Providers, 1)
+	assert.Contains(t, parsed.Providers[0].Output, "skip: /x/a")
+}
