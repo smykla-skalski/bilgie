@@ -566,6 +566,10 @@ func configFindings(in Input) []Finding {
 		out = append(out, f)
 	}
 
+	if f, ok := sweepFinding(in.Cfg); ok {
+		out = append(out, f)
+	}
+
 	for _, err := range in.LoadErrors {
 		name := ""
 		if le, ok := errors.AsType[*provider.LoadError](err); ok {
@@ -636,6 +640,32 @@ func disabledFinding(cfg *config.Config) (Finding, bool) {
 	return Finding{
 		Area: "config", Level: Note,
 		Message: fmt.Sprintf("%d provider(s) disabled: %s", len(names), strings.Join(names, ", ")),
+	}, true
+}
+
+// sweepFinding names the disabled directory-pattern providers that auto still
+// sweeps under disk pressure and the tier each one starts at.
+func sweepFinding(cfg *config.Config) (Finding, bool) {
+	var parts []string
+	for name := range cfg.Providers {
+		pc := cfg.Providers[name]
+		if pc.Enabled || pc.Type != config.TypeDirPattern || !cfg.Applies(name) {
+			continue
+		}
+		tier := config.SweepTierEmergency
+		if pc.SweepsAtCritical() {
+			tier = config.SweepTierCritical
+		}
+		parts = append(parts, name+" ("+tier+")")
+	}
+	if len(parts) == 0 {
+		return Finding{}, false
+	}
+	slices.Sort(parts)
+	return Finding{
+		Area: "sweeps", Level: Note,
+		Message: "disabled but swept under disk pressure: " + strings.Join(parts, ", "),
+		Hint:    "set sweep_tier: emergency on a provider to sweep it only at the emergency tier; stale directories only, see README",
 	}, true
 }
 

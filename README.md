@@ -118,7 +118,7 @@ Providers are auto-detected — only tools installed on your system appear in th
 | **Tools** | | |
 | homebrew | 5G | `brew cleanup -s` |
 | mise | 8G | `mise prune` for unused tool versions (listed first via `--dry-run`), `downloads` and cache files by age; see [mise](#mise) |
-| docker | 50G | `docker system prune -af` |
+| docker | 50G | `docker system prune -af`: unused images and build cache, never volumes; on by default and part of `auto` |
 | docker-volumes (disabled by default; ignores max_age) | 50G | `docker volume prune -f` |
 | jetbrains | 3G | file-based |
 | **Browsers** | | |
@@ -137,6 +137,7 @@ Providers are auto-detected — only tools installed on your system appear in th
 | copilot (macOS only) | 1G | file-based; skips paths with open files |
 | golangci-lint (macOS only) | 1G | file-based; skips paths with open files |
 | node-gyp (macOS only) | 1G | file-based; skips paths with open files |
+| sail-dirs (disabled by default, but `auto` sweeps it from the critical tier; `sail*` in the OS and system temp dirs) | 20G | whole-directory; idle, open-file, owner and `.git` checks; see the `dir-pattern` notes below |
 | agent-scratch-dirs (disabled by default; every OS temp-dir child that carries an owner marker) | 20G | whole-directory; owner, idle, open-file and `.git` checks |
 | sail-e2e-dirs (disabled by default; `~/Library/Caches/dev.smykla.sail.e2e.*`, macOS only) | 5G | whole-directory; idle, open-file and `.git` checks (git data inside the directory is fine) |
 | **Project artifacts** | | |
@@ -397,8 +398,8 @@ and starts no provider unless it decides to run a pass. A healthy tick prints no
 |------------|------------------|
 | healthy | nothing, except a routine pass every `auto.interval` (default 30m) that trims providers over their limit |
 | low | a full pass, at most every `auto.low_cooldown` (default 10m) |
-| critical | the same pass at the shorter `auto.critical_cooldown` (default 2m); providers expected to free the most go first (rebuild cost breaks ties) and the pass stops as soon as space recovers |
-| emergency | as critical, with the stale-directory sweeps (`dir-pattern` providers such as `sail-dirs`, even when disabled) first |
+| critical | the same pass at the shorter `auto.critical_cooldown` (default 2m); the `sail-dirs` sweep (even when disabled) goes first, then the providers expected to free the most (rebuild cost breaks ties); the pass stops as soon as space recovers |
+| emergency | as critical, with every stale-directory sweep (`dir-pattern` providers, even when disabled) first |
 | falling | a low-tier pass when the projected free space crosses the low threshold within `auto.forecast` (default 15m) |
 
 Thresholds:
@@ -441,14 +442,15 @@ and always trims in smart mode (files older than `max_age`, then LRU to `max_siz
 |------|------------|-----------|
 | ok | at or above the low threshold | only enabled providers over their limit |
 | low | below the low threshold | every enabled provider, cheapest to rebuild first; stops once free space is back above the threshold plus the hysteresis |
-| critical | below `critical_free` | the low-tier trim, scheduled at the short cooldown, with the providers expected to free the most first |
-| emergency | below `emergency_free` | the stale-directory sweeps first (`dir-pattern` providers such as `sail-dirs`, even when disabled), then the critical-tier order |
+| critical | below `critical_free` | the `sail-dirs` sweep first (even when disabled; `sweep_tier: critical`), then the low-tier trim at the short cooldown with the providers expected to free the most first |
+| emergency | below `emergency_free` | every stale-directory sweep first (`dir-pattern` providers, even when disabled), then the critical-tier order |
 
 Each provider gets its own 10 minute budget inside the 45 minute pass deadline. A provider that exceeds it is reported as timed out with the bytes it freed so far, and the pass moves on to the next provider. The budget is fixed and not configurable.
 
 Safety rules:
 
-- `docker-volumes` never runs in `auto`, enabled or not.
+- `docker-volumes` never runs in `auto`, enabled or not, and neither does any provider whose command prunes volumes. The `docker` provider prunes unused images and the build cache only; it never passes `--volumes`.
+- A disabled `dir-pattern` sweep removes only whole directories that passed `min_idle` and the open-file, owner-marker and `.git` checks; a root whose owner still runs is never removed. `sweep_tier` picks the tier it starts at: `sail-dirs` starts at `critical`, the others at `emergency` (the default). Set `providers.sail-dirs.sweep_tier: emergency` to keep it out of the critical tier.
 - `xcode-archives` never runs in `auto`, by name or by path (any provider on an Xcode `Archives` folder is skipped): archives hold App Store dSYMs and signed builds.
 - Protection is by exact location, never by a directory's name. A provider is skipped when its path is, lies inside, or contains one of the protected roots: `~/Downloads`, the opencode data, config, cache and home directories, Docker volumes and the `protected` list. A directory that is merely named `opencode`, `worktrees` or `Downloads` inside a cache (mise keeps `downloads/opencode`) protects nothing.
 - A provider whose path lies inside a git checkout is skipped. Below the path, `auto` looks for a git checkout or worktree by its marker, an entry named `.git` of any kind (a directory, or the file of a linked worktree whose `gitdir:` points into another repository's `worktrees/` directory; the file is never opened, so any `.git` file protects), down to 3 levels below the path. The scan lists directory names only: it never opens files, never follows symlinks, stops at the first hit and gives up after 5 seconds, 50000 directories or 2000000 entries. A checkout buried deeper than 3 levels is not detected by this scan. The skip reason names the checkout that was found. For a `dir-pattern` sweep the check is per match, and the git marker scan is left to the provider's own `.git` check (see `dir-pattern` above) while `skip_if_git_worktree` is on: a protected match is skipped and counted, and the clean matches around it still go. The sweep is skipped whole only when every match is protected. For any other provider one protected entry skips the whole provider.
@@ -554,6 +556,8 @@ $ bilgie doctor
          112 x node /Users/me/dev/app/worker.js (40 with parent PID 1)
          9 x /usr/bin/python3 stale.py
        what to do: quit or restart the largest memory users; bilgie only reports and never kills processes. Swap grows on the same disk as free space
+[note] sweeps: disabled but swept under disk pressure: agent-scratch-dirs (emergency), sail-dirs (critical), sail-e2e-dirs (emergency)
+       what to do: set sweep_tier: emergency on a provider to sweep it only at the emergency tier; stale directories only, see README
 [note] config: 3 provider(s) disabled: docker-volumes, sail-dirs, xcode-archives
 [warn] config: gradle was skipped on each of the last 5 runs: unavailable
        what to do: install the tool gradle needs, or set providers.gradle.enabled: false
@@ -614,6 +618,7 @@ providers:
 | `trim_idle` | `project-artifacts`: Rust build units (`.fingerprint`, `build`, `deps`, `incremental`) unused for this long are removed from the `target/` of an active project; a profile whose `.cargo-lock` is held is skipped, and dry-run lists the bytes it would trim (default `30d`; units `m`, `h`, `d`, minimum `1m`) |
 | `skip_if_open` | `dir-pattern`, `project-artifacts`: skip directories with open files via `lsof +D` (default `true`) |
 | `owner_marker` | `dir-pattern`: only sweep matches that carry an owner marker file (default `false`; `agent-scratch-dirs` sets `true`) |
+| `sweep_tier` | `dir-pattern`: tier from which `auto` sweeps the provider while it is disabled, `critical` or `emergency` (default `emergency`; `sail-dirs` sets `critical`) |
 | `skip_if_git_worktree` | `dir-pattern`: skip directories whose `.git` entries reach outside them (default `true`) |
 | `max_depth` | `project-artifacts`: directory levels searched below each root (default `4`, from 1 to 16; a negative value is an error) |
 | `pass_budget` | `project-artifacts`: time one clean pass may spend before the remaining candidates are skipped (default `30s`; units `ms`, `s`, `m`, `h`, `d`) |
@@ -634,7 +639,7 @@ auto:
   min_free_pct: 5           # ... or this percentage of the volume (0 disables)
   min_free_cap: 100G        # the percentage part never exceeds this
   critical_free: 10G        # critical tier below this
-  emergency_free: 5G        # emergency tier below this (stale-directory sweeps)
+  emergency_free: 5G        # emergency tier below this (all stale-directory sweeps)
   hysteresis: 2G            # a tier eases only this far above its threshold
   low_cooldown: 10m         # minimum gap between passes at the low tier
   critical_cooldown: 2m     # ... at the critical and emergency tiers
@@ -851,7 +856,12 @@ processes.
 
 The built-in `sail-dirs` provider (`sail*` in the OS temp dir and in the fixed system
 temp dir, `/tmp` or `/private/tmp` on macOS, listed once when both resolve to the same directory)
-uses `dir-pattern` and is disabled by default. The paths follow the machine and are not saved to
+uses `dir-pattern` and is disabled by default, so `clean` and the low tier skip it until it is enabled.
+`auto` still sweeps it while it is disabled, from the critical tier (`sweep_tier: critical`): a
+critical or emergency pass reclaims the stale `sail*` scratch roots first, each one only after
+`min_idle` (default `2h`) and the open-file, owner-marker and `.git` checks. Set
+`providers.sail-dirs.sweep_tier: emergency` to wait for the emergency tier, or `enabled: true` to
+run it at every tier from low. The paths follow the machine and are not saved to
 the config file. Enable it with `enabled: true` after reviewing
 `bilgie clean sail-dirs --dry-run`, which lists each directory with its size,
 idle time and the reason it would be skipped.

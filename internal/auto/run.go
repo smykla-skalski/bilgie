@@ -132,11 +132,13 @@ func (r Report) Err() error {
 }
 
 // candidate is a provider auto may run. A sweep is a disabled
-// directory-pattern provider that runs only at the emergency tier.
+// directory-pattern provider that runs only from its sweep tier on: the
+// emergency tier, or the critical tier when sweep_tier says so.
 type candidate struct {
-	cfg   config.Provider
-	name  string
-	sweep bool
+	cfg       config.Provider
+	name      string
+	sweep     bool
+	sweepFrom Tier
 }
 
 // Run picks the pressure tier from free space and trims providers
@@ -184,7 +186,7 @@ func Run(ctx context.Context, cfg *config.Config, dryRun bool, deps Deps) (Repor
 			fmt.Fprintf(deps.Out, "free space recovered: %s free, stopping\n", size.FormatSize(rep.End.Free))
 			break
 		}
-		if c.sweep && current != TierEmergency {
+		if c.sweep && current < c.sweepFrom {
 			continue
 		}
 
@@ -250,8 +252,9 @@ func dryRunSuffix(dryRun bool) string {
 // candidates lists the providers for a tier. At the ok and low tiers the
 // cheapest to rebuild go first. At the critical and emergency tiers the
 // providers expected to free the most go first, rebuild cost breaking ties,
-// and at the emergency tier the stale-directory sweeps lead because they free
-// the most. docker-volumes is never listed.
+// and the stale-directory sweeps that apply to the tier (sail-dirs from the
+// critical tier, the rest at the emergency tier) lead because they free the
+// most. docker-volumes is never listed.
 func candidates(cfg *config.Config, tier Tier) []candidate {
 	var sweeps, regular []string
 	byName := make(map[string]candidate)
@@ -265,8 +268,8 @@ func candidates(cfg *config.Config, tier Tier) []candidate {
 		case pc.Enabled:
 			byName[name] = candidate{name: name, cfg: pc}
 			regular = append(regular, name)
-		case pc.Type == config.TypeDirPattern && tier == TierEmergency:
-			byName[name] = candidate{name: name, cfg: pc, sweep: true}
+		case pc.Type == config.TypeDirPattern && tier >= sweepTier(pc):
+			byName[name] = candidate{name: name, cfg: pc, sweep: true, sweepFrom: sweepTier(pc)}
 			sweeps = append(sweeps, name)
 		}
 	}
@@ -284,6 +287,15 @@ func candidates(cfg *config.Config, tier Tier) []candidate {
 		out = append(out, byName[name])
 	}
 	return out
+}
+
+// sweepTier is the lowest tier at which a disabled directory-pattern provider
+// is swept.
+func sweepTier(pc config.Provider) Tier {
+	if pc.SweepsAtCritical() {
+		return TierCritical
+	}
+	return TierEmergency
 }
 
 // hasTargets reports whether a provider has paths on disk. An enabled

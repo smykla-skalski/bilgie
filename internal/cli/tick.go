@@ -22,8 +22,8 @@ var TickCmd = &cobra.Command{
 
   healthy    nothing to do, unless the routine pass is due (auto.interval)
   low        a full pass, at most every auto.low_cooldown
-  critical   a full pass, at most every auto.critical_cooldown
-  emergency  the same, with the stale-directory sweeps first
+  critical   a full pass, at most every auto.critical_cooldown, with the sail-dirs sweep first
+  emergency  the same, with all the stale-directory sweeps first
   falling    a pass when the median recent rate of change projects the low threshold
              inside auto.forecast
 

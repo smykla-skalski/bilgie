@@ -259,6 +259,73 @@ func TestRun_CriticalSweepsFirstEvenWhenDisabled(t *testing.T) {
 	assert.Equal(t, []string{"sail-dirs", "npm"}, h.calls)
 }
 
+func sweepAtCritical(_ *fakeProvider, pc *config.Provider) {
+	pc.Type = config.TypeDirPattern
+	pc.SweepTier = config.SweepTierCritical
+}
+
+func TestRun_CriticalSweepsOnlyProvidersThatAskForIt(t *testing.T) {
+	h := newHarness(t)
+	h.add("npm", true, false)
+	h.add("sail-dirs", false, false, sweepAtCritical)
+	h.add("agent-scratch-dirs", false, false, func(_ *fakeProvider, pc *config.Provider) { pc.Type = config.TypeDirPattern })
+
+	report, err := h.run(false, 7*gib)
+
+	require.NoError(t, err)
+	assert.Equal(t, TierCritical, report.Tier)
+	assert.Equal(t, []string{"sail-dirs", "npm"}, h.calls, "the emergency-only sweep waits for the emergency tier")
+}
+
+func TestRun_EmergencySweepsEveryDisabledDirPattern(t *testing.T) {
+	h := newHarness(t)
+	h.add("sail-dirs", false, false, sweepAtCritical)
+	h.add("agent-scratch-dirs", false, false, func(_ *fakeProvider, pc *config.Provider) { pc.Type = config.TypeDirPattern })
+
+	report, err := h.run(false, 2*gib)
+
+	require.NoError(t, err)
+	assert.Equal(t, TierEmergency, report.Tier)
+	assert.ElementsMatch(t, []string{"sail-dirs", "agent-scratch-dirs"}, h.calls)
+}
+
+func TestRun_SweepAtEmergencyTierStaysOutOfCritical(t *testing.T) {
+	h := newHarness(t)
+	h.add("sail-dirs", false, false, func(f *fakeProvider, pc *config.Provider) {
+		sweepAtCritical(f, pc)
+		pc.SweepTier = config.SweepTierEmergency
+	})
+
+	_, err := h.run(false, 7*gib)
+
+	require.NoError(t, err)
+	assert.Empty(t, h.calls)
+}
+
+func TestRun_CriticalSweepNotRunBelowCriticalTier(t *testing.T) {
+	h := newHarness(t)
+	h.add("sail-dirs", false, true, sweepAtCritical)
+
+	for _, free := range []int64{400 * gib, 100 * gib, 20 * gib} {
+		_, err := h.run(false, free)
+		require.NoError(t, err)
+	}
+
+	assert.Empty(t, h.calls)
+}
+
+func TestRun_CriticalSweepStopsOnceSpaceRecovers(t *testing.T) {
+	h := newHarness(t)
+	h.add("sail-dirs", false, false, sweepAtCritical)
+	h.add("npm", true, false)
+
+	report, err := h.run(false, 7*gib, 7*gib, 400*gib, 400*gib)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"sail-dirs"}, h.calls)
+	assert.True(t, report.Recovered)
+}
+
 func TestRun_SweepSkippedWhenTierDropsBelowCritical(t *testing.T) {
 	h := newHarness(t)
 	h.add("npm", true, false)
@@ -303,6 +370,16 @@ func TestRun_NeverRunsDockerVolumes(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotContains(t, h.calls, "docker-volumes", "free=%d", free)
 		assert.Contains(t, h.calls, "npm")
+	}
+}
+
+func TestExcluded_DefaultsOnlyExcludeDockerVolumes(t *testing.T) {
+	for name, pc := range config.DefaultConfig().Providers {
+		if name == VolumesProvider {
+			assert.True(t, excluded(name, pc), "auto never runs %s", name)
+			continue
+		}
+		assert.False(t, pruneVolumes(pc.CleanCmd), "%s must not prune volumes: %q", name, pc.CleanCmd)
 	}
 }
 
