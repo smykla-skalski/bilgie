@@ -103,6 +103,8 @@ func TestDiagnose_Findings(t *testing.T) {
 			"free space", "tier critical", "bilgie status", Fail},
 		{"emergency space", func(in *Input) { in.Free.Free = 2 * gib },
 			"free space", "tier emergency", "bilgie status", Fail},
+		{"linked state file", func(in *Input) { in.LinkedPaths = []string{"/s/runs.jsonl"} },
+			"state", "/s/runs.jsonl is a symbolic link: bilgie refuses to write through it", "delete the link", Warn},
 		{"no tick on an installed agent", func(in *Input) { in.Tick = auto.TickState{} },
 			"last tick", "no tick recorded", "install-agent", Warn},
 		{"no tick without an agent", func(in *Input) { in.Tick = auto.TickState{}; in.Agent.Installed = false },

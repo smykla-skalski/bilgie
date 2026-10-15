@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/smykla-skalski/bilgie/internal/appname"
+	"github.com/smykla-skalski/bilgie/internal/fsx"
 	"github.com/smykla-skalski/bilgie/internal/osshim"
 )
 
@@ -32,16 +33,17 @@ func MarkFirstRunPending(stateDir string) error {
 	if err := os.MkdirAll(stateDir, 0o750); err != nil {
 		return fmt.Errorf("create state dir: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(stateDir, firstRunMarker), []byte("dry-run pending\n"), 0o600); err != nil {
+	if err := fsx.WriteFileNoLink(filepath.Join(stateDir, firstRunMarker), []byte("dry-run pending\n"), 0o600); err != nil {
 		return fmt.Errorf("write first-run marker: %w", err)
 	}
 	return nil
 }
 
 // FirstRunPending reports whether the next auto run must be a dry-run. A
-// marker that cannot be read counts as pending: the safe answer is no deletion.
+// marker that cannot be read, or a link left in its place, counts as pending:
+// the safe answer is no deletion.
 func FirstRunPending(stateDir string) bool {
-	_, err := os.Stat(filepath.Join(stateDir, firstRunMarker))
+	_, err := os.Lstat(filepath.Join(stateDir, firstRunMarker))
 	return err == nil || !errors.Is(err, os.ErrNotExist)
 }
 
@@ -81,4 +83,21 @@ func (l *RunLock) Release() {
 		return
 	}
 	l.release()
+}
+
+// LinkedState lists the files bilgie writes in stateDir that are symbolic
+// links. Writers refuse to write through them, so each one needs the user to
+// remove it.
+func LinkedState(stateDir string) []string {
+	return linked(filepath.Join(stateDir, firstRunMarker), filepath.Join(stateDir, RunLogName))
+}
+
+func linked(paths ...string) []string {
+	var out []string
+	for _, p := range paths {
+		if info, err := os.Lstat(p); err == nil && info.Mode()&os.ModeSymlink != 0 {
+			out = append(out, p)
+		}
+	}
+	return out
 }

@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/smykla-skalski/bilgie/internal/fsx"
 )
 
 // State files next to runs.jsonl. They are separate so a tick (which only
@@ -59,6 +61,9 @@ type PassState struct {
 	DryRun   bool                    `json:"dry_run"`
 }
 
+// maxStateBytes bounds a state file; a real one is a few KiB.
+const maxStateBytes = 1 << 20
+
 func readJSON(stateDir, name string, v any) error {
 	path := filepath.Join(stateDir, name)
 	info, err := os.Lstat(path)
@@ -71,7 +76,7 @@ func readJSON(stateDir, name string, v any) error {
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("%w: %s is not a regular file", ErrBadState, name)
 	}
-	data, err := os.ReadFile(path)
+	data, err := fsx.ReadRegular(path, maxStateBytes)
 	if err != nil {
 		return fmt.Errorf("%w: read %s: %w", ErrBadState, name, err)
 	}

@@ -44,3 +44,58 @@ func TestReadRegular_NeverBlocksOnSpecialFiles(t *testing.T) {
 		})
 	}
 }
+
+func TestWriteFileNoLink_RefusesLinksAndSpecialFiles(t *testing.T) {
+	dir := t.TempDir()
+	victim := filepath.Join(dir, "victim")
+	require.NoError(t, os.WriteFile(victim, []byte("keep"), 0o600))
+	link := filepath.Join(dir, "link")
+	require.NoError(t, os.Symlink(victim, link))
+	dangling := filepath.Join(dir, "dangling")
+	require.NoError(t, os.Symlink(filepath.Join(dir, "created-by-mistake"), dangling))
+	fifo := filepath.Join(dir, "fifo")
+	require.NoError(t, syscall.Mkfifo(fifo, 0o600))
+
+	within(t, func() {
+		require.ErrorIs(t, WriteFileNoLink(link, []byte("x"), 0o600), ErrSymlink)
+		require.ErrorIs(t, WriteFileNoLink(dangling, []byte("x"), 0o600), ErrSymlink)
+		require.ErrorIs(t, WriteFileNoLink(fifo, []byte("x"), 0o600), ErrNotRegular)
+		require.ErrorIs(t, WriteFileNoLink(dir, []byte("x"), 0o600), ErrNotRegular)
+		_, err := OpenAppendNoLink(link, 0o600)
+		require.ErrorIs(t, err, ErrSymlink)
+		_, err = OpenAppendNoLink(fifo, 0o600)
+		require.ErrorIs(t, err, ErrNotRegular)
+	})
+
+	data, err := os.ReadFile(victim)
+	require.NoError(t, err)
+	assert.Equal(t, "keep", string(data))
+	assert.NoFileExists(t, filepath.Join(dir, "created-by-mistake"))
+}
+
+func TestNoFollowFlag_RefusesALinkSwappedInAfterTheCheck(t *testing.T) {
+	dir := t.TempDir()
+	victim := filepath.Join(dir, "victim")
+	require.NoError(t, os.WriteFile(victim, []byte("keep"), 0o600))
+	link := filepath.Join(dir, "link")
+	require.NoError(t, os.Symlink(victim, link))
+
+	_, err := os.OpenFile(link, os.O_WRONLY|noFollowFlag, 0)
+
+	require.ErrorIs(t, err, errLoop)
+}
+
+func TestOpenFailuresAreReturned(t *testing.T) {
+	dir := t.TempDir()
+	locked := filepath.Join(dir, "locked")
+	require.NoError(t, os.WriteFile(locked, []byte("x"), 0o000))
+
+	_, err := OpenRegular(locked)
+	if os.Geteuid() != 0 {
+		require.ErrorIs(t, err, os.ErrPermission)
+		require.ErrorIs(t, WriteFileNoLink(locked, []byte("y"), 0o600), os.ErrPermission)
+	}
+	require.Error(t, WriteFileNoLink(filepath.Join(dir, "no-such-dir", "f"), []byte("y"), 0o600))
+	_, err = OpenAppendNoLink(filepath.Join(dir, "no-such-dir", "f"), 0o600)
+	require.Error(t, err)
+}

@@ -62,9 +62,10 @@ type protectedScan func(ctx context.Context, cfg *config.Config) auto.ProtectedR
 
 // StatusCmd shows cache status for all enabled providers.
 var StatusCmd = &cobra.Command{
-	Use:   "status",
-	Short: "Show cache status for all providers",
-	RunE:  runStatus,
+	Use:          "status",
+	Short:        "Show cache status for all providers",
+	RunE:         runStatus,
+	SilenceUsage: true,
 }
 
 func init() {

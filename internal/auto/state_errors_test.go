@@ -77,3 +77,13 @@ func TestRunLock_ReleaseIsSafeOnNilAndEmptyLocks(t *testing.T) {
 	assert.NotPanics(t, func() { nilLock.Release() })
 	assert.NotPanics(t, func() { (&RunLock{}).Release() })
 }
+
+func TestReadTickState_OversizedFileIsBadState(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, TickStateName), make([]byte, maxStateBytes+1), 0o600))
+
+	_, err := ReadTickState(dir)
+
+	require.ErrorIs(t, err, ErrBadState)
+	assert.ErrorContains(t, err, "too large")
+}
