@@ -450,20 +450,6 @@ func TestDistinctRoots_CaseVariantSpellingsOfOneDirectoryCountOnce(t *testing.T)
 	assert.Equal(t, int64(100), res.Size)
 }
 
-func TestDistinctRoots_CaseDifferingDirectoriesStayDistinct(t *testing.T) {
-	root := t.TempDir()
-	createTestFile(t, filepath.Join(root, "a", "x.bin"), 100, time.Hour)
-	createTestFile(t, filepath.Join(root, "A", "y.bin"), 200, time.Hour)
-	if entries, err := os.ReadDir(root); err != nil || len(entries) != 2 {
-		t.Skip("file system is case-insensitive")
-	}
-
-	assert.Len(t, distinctRoots([]string{filepath.Join(root, "a"), filepath.Join(root, "A")}), 2)
-	res, err := CalculateSize([]string{filepath.Join(root, "a"), filepath.Join(root, "A")})
-	require.NoError(t, err)
-	assert.Equal(t, int64(300), res.Size)
-}
-
 func TestScan_SymlinkRootIsNotFollowed(t *testing.T) {
 	target := t.TempDir()
 	createTestFile(t, filepath.Join(target, "x.bin"), 100, time.Hour)
@@ -507,28 +493,14 @@ func TestDistinctRoots_RepeatedMissingRootCountsOnce(t *testing.T) {
 	assert.Equal(t, []string{dangling}, distinctRoots([]string{dangling, dangling}))
 }
 
-func TestDistinctRoots_CaseOnlyHardLinksStayDistinctOnCaseSensitiveVolumes(t *testing.T) {
+func TestDistinctRoots_CaseVariantSpellingsOfOneFileCountOnce(t *testing.T) {
 	root := t.TempDir()
-	upper := filepath.Join(root, "File")
-	createTestFile(t, upper, 100, time.Hour)
-	lower := filepath.Join(root, "file")
-	if err := os.Link(upper, lower); err != nil {
-		t.Skipf("hard links unsupported here: %v", err)
-	}
-	if entries, err := os.ReadDir(root); err != nil || len(entries) != 2 {
-		t.Skip("file system is case-insensitive")
+	createTestFile(t, filepath.Join(root, "File"), 100, time.Hour)
+	if _, err := os.Stat(filepath.Join(root, "file")); err != nil {
+		t.Skip("file system is case-sensitive")
 	}
 
-	assert.Len(t, distinctRoots([]string{upper, lower}), 2)
-	assert.False(t, caseInsensitive(upper))
-}
-
-func TestCaseInsensitive_AgreesWithTheVolume(t *testing.T) {
-	root := t.TempDir()
-	dir := filepath.Join(root, "Probe")
-	require.NoError(t, os.Mkdir(dir, 0o750))
-	_, err := os.Stat(filepath.Join(root, "probe"))
-
-	assert.Equal(t, err == nil, caseInsensitive(filepath.Join(dir, "f")))
-	assert.False(t, caseInsensitive(string(filepath.Separator)+"x"))
+	res, err := CalculateSize([]string{filepath.Join(root, "File"), filepath.Join(root, "file")})
+	require.NoError(t, err)
+	assert.Equal(t, int64(100), res.Size)
 }

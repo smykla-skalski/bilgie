@@ -948,3 +948,11 @@ func TestFoldPathSpaced_ResolvesDotDotAfterADotElement(t *testing.T) {
 	assert.Contains(t, foldPathSpaced("cmd /Users/me/My Dir/./../proj"), foldPath("/Users/me/proj"))
 	assert.Contains(t, foldPathSpaced("cmd /a/./b"), foldPath("/a/b"))
 }
+
+func TestFoldPathSpaced_StaysLinearOnRepeatedTails(t *testing.T) {
+	line := strings.Repeat("/a b/.. x", 100000)
+	start := time.Now()
+	got := foldPathSpaced(line)
+	assert.Less(t, time.Since(start), 2*time.Second)
+	assert.True(t, strings.HasPrefix(got, " x x x"), got[:20])
+}

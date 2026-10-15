@@ -682,23 +682,37 @@ func foldCaseOS(s string) string {
 // spaces, in one pass. A dot-dot with no directory before it is left for the
 // per-word fold.
 func resolveDotDot(s string) string {
+	type element struct {
+		text  string
+		tails []string
+	}
 	parts := strings.Split(collapseSlashes(s), "/")
-	out := parts[:1]
+	out := []element{{text: parts[0]}}
 	for _, part := range parts[1:] {
 		if part == "." {
 			continue
 		}
 		tail, isDotDot := strings.CutPrefix(part, "..")
 		if isDotDot && (tail == "" || tail[0] == ' ') && len(out) > 1 {
-			if top := out[len(out)-1]; top != "" && top != ".." {
+			if top := out[len(out)-1].text; top != "" && top != ".." {
 				out = out[:len(out)-1]
-				out[len(out)-1] += tail
+				out[len(out)-1].tails = append(out[len(out)-1].tails, tail)
 				continue
 			}
 		}
-		out = append(out, part)
+		out = append(out, element{text: part})
 	}
-	return strings.Join(out, "/")
+	var b strings.Builder
+	for i, e := range out {
+		if i > 0 {
+			b.WriteByte('/')
+		}
+		b.WriteString(e.text)
+		for _, t := range e.tails {
+			b.WriteString(t)
+		}
+	}
+	return b.String()
 }
 
 func collapseSlashes(s string) string {
