@@ -112,20 +112,54 @@ func TestFindGitMarker_MissingRootIsClear(t *testing.T) {
 	assert.Equal(t, markerNone, findGitMarker(t.Context(), filepath.Join(t.TempDir(), "gone"), markerLimits).outcome)
 }
 
-func TestFindGitMarker_UnreadableDirFailsClosed(t *testing.T) {
+func lockDir(t *testing.T, dir string) {
+	t.Helper()
 	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
 		t.Skip("permission bits are not enforced here")
 	}
-	root := t.TempDir()
-	locked := filepath.Join(root, "locked")
-	require.NoError(t, os.MkdirAll(locked, 0o750))
-	require.NoError(t, os.Chmod(locked, 0o000))
-	t.Cleanup(func() { _ = os.Chmod(locked, 0o750) })
+	require.NoError(t, os.MkdirAll(dir, 0o750))
+	require.NoError(t, os.Chmod(dir, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o750) })
+}
+
+func TestFindGitMarker_UnreadableRootFailsClosed(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "root")
+	lockDir(t, root)
 
 	res := findGitMarker(t.Context(), root, markerLimits)
 
 	assert.Equal(t, markerUnreadable, res.outcome)
-	assert.Contains(t, res.detail, locked)
+	assert.Contains(t, res.detail, root)
+}
+
+func TestFindGitMarker_UnreadableSubdirIsSkippedAndSiblingsScanned(t *testing.T) {
+	tests := []struct {
+		name     string
+		locked   []string
+		sibling  string
+		wantHit  bool
+		wantPath string
+	}{
+		{name: "clean siblings", locked: []string{"a", "locked"}, sibling: "b/c"},
+		{name: "deep locked dir", locked: []string{"a", "b", "locked"}, sibling: "a/c"},
+		{name: "checkout beside locked dir", locked: []string{"locked"}, sibling: "repo/.git", wantHit: true, wantPath: "repo"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			lockDir(t, filepath.Join(append([]string{root}, tt.locked...)...))
+			touch(t, filepath.Join(root, tt.sibling, "file"))
+
+			res := findGitMarker(t.Context(), root, markerLimits)
+
+			if !tt.wantHit {
+				assert.Equal(t, markerNone, res.outcome)
+				return
+			}
+			assert.Equal(t, markerFound, res.outcome)
+			assert.Equal(t, filepath.Join(root, tt.wantPath), res.detail)
+		})
+	}
 }
 
 func TestFindGitMarker_LimitsReportTooLargeWithPath(t *testing.T) {

@@ -62,7 +62,7 @@ func deepReason(ctx context.Context, path string, lim scanLimits) (string, error
 			if dirs > lim.dirs {
 				return "", nil
 			}
-			listing := listDir(ctx, parent, dir, lim.entries-entries, lim.dirs-dirs-len(next), depth < lim.depth)
+			listing := listDir(ctx, parent, dir, lim.entries-entries, lim.dirs-dirs-len(next), depth < lim.depth, depth == 0)
 			switch {
 			case listing.outcome == markerCancelled:
 				return "", parent.Err()
