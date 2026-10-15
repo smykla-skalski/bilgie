@@ -926,3 +926,21 @@ func TestTreeProvider_DotDotAfterSpacedDirectoryHoldsTree(t *testing.T) {
 
 	assert.DirExists(t, inUse)
 }
+
+func TestFoldPathSpaced_KeepsWhatItCannotResolve(t *testing.T) {
+	assert.Equal(t, foldPath("/../a"), foldPathSpaced("/../a"))
+	assert.Equal(t, foldPath("/a/../.."), foldPathSpaced("/a/../.."))
+	assert.Equal(t, foldPath("x/..y"), foldPathSpaced("x/..y"))
+	assert.Equal(t, foldPath("/a/./../b"), foldPathSpaced("/a/./../b"))
+}
+
+func TestFoldPathSpaced_ResolvesDotDotBeforeASpace(t *testing.T) {
+	assert.Contains(t, foldPathSpaced("cd /a/b c/.. then /x"), foldPath("/a then"))
+}
+
+func TestFoldPathSpaced_StaysLinearOnLongLines(t *testing.T) {
+	line := "node " + strings.Repeat("/a", 100000) + strings.Repeat("/..", 100000)
+	start := time.Now()
+	foldPathSpaced(line)
+	assert.Less(t, time.Since(start), 2*time.Second)
+}

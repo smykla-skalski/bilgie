@@ -328,6 +328,7 @@ func measureEntry(ctx context.Context, dir string, group int) (u treeUnit, unrea
 func (p *TreeProvider) markHeld(ctx context.Context, units []treeUnit) {
 	var (
 		lines     []string
+		folded    []foldedLine
 		listErr   error
 		listed    bool
 		idleSince = p.now().Add(-defaultMinIdle)
@@ -355,8 +356,14 @@ func (p *TreeProvider) markHeld(ctx context.Context, units []treeUnit) {
 			}
 			continue
 		}
-		for _, line := range lines {
-			if matchesTree(line, u.path) {
+		if folded == nil {
+			folded = make([]foldedLine, len(lines))
+			for i, line := range lines {
+				folded[i] = foldLine(line)
+			}
+		}
+		for _, line := range folded {
+			if line.names(u.path) {
 				u.hold = "in use by a running process"
 				break
 			}
@@ -672,29 +679,23 @@ func foldCaseOS(s string) string {
 }
 
 // resolveDotDot removes "<dir>/.." pairs where the directory name may hold
-// spaces. A dot-dot with no directory before it is left for the per-word fold.
+// spaces, in one pass. A dot-dot with no directory before it is left for the
+// per-word fold.
 func resolveDotDot(s string) string {
-	s = collapseSlashes(s)
-	for from := 0; from < len(s); {
-		i := strings.Index(s[from:], "/..")
-		if i < 0 {
-			break
+	parts := strings.Split(collapseSlashes(s), "/")
+	out := parts[:1]
+	for _, part := range parts[1:] {
+		tail, isDotDot := strings.CutPrefix(part, "..")
+		if isDotDot && (tail == "" || tail[0] == ' ') && len(out) > 1 {
+			if top := out[len(out)-1]; top != "" && top != ".." && top != "." {
+				out = out[:len(out)-1]
+				out[len(out)-1] += tail
+				continue
+			}
 		}
-		i += from
-		end := i + len("/..")
-		if end < len(s) && s[end] != '/' && s[end] != ' ' {
-			from = end
-			continue
-		}
-		j := strings.LastIndex(s[:i], "/")
-		if j < 0 || s[j+1:i] == ".." || s[j+1:i] == "." || j+1 == i {
-			from = end
-			continue
-		}
-		s = s[:j] + s[end:]
-		from = 0
+		out = append(out, part)
 	}
-	return s
+	return strings.Join(out, "/")
 }
 
 func collapseSlashes(s string) string {
@@ -704,10 +705,17 @@ func collapseSlashes(s string) string {
 	return s
 }
 
-// matchesTree reports whether a process command line names the tree dir.
-func matchesTree(line, dir string) bool {
+// foldedLine is a process command line folded once for every tree check.
+type foldedLine struct{ plain, spaced string }
+
+func foldLine(line string) foldedLine {
+	return foldedLine{plain: foldPath(line), spaced: foldPathSpaced(line)}
+}
+
+// names reports whether the command line names the tree dir.
+func (l foldedLine) names(dir string) bool {
 	want := foldPath(dir)
-	return strings.Contains(foldPath(line), want) || strings.Contains(foldPathSpaced(line), want)
+	return strings.Contains(l.plain, want) || strings.Contains(l.spaced, want)
 }
 
 func firstMatch(lines, wanted []string) string {

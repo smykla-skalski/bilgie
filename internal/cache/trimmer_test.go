@@ -479,3 +479,30 @@ func TestScan_SymlinkRootIsNotFollowed(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, list.Files)
 }
+
+func TestDistinctRoots_HardLinkedFileRootsStayDistinct(t *testing.T) {
+	root := t.TempDir()
+	a := filepath.Join(root, "a.bin")
+	createTestFile(t, a, 300, 48*time.Hour)
+	b := filepath.Join(root, "b.bin")
+	linkOrSkip(t, a, b)
+
+	assert.Len(t, distinctRoots([]string{a, b}), 2)
+	result, err := Trim(context.Background(), []string{a, b}, TrimOptions{MaxSize: 10000, MaxAge: time.Hour})
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), result.DeletedCount)
+	assert.Equal(t, int64(300), result.FreedBytes)
+	assert.NoFileExists(t, a)
+	assert.NoFileExists(t, b)
+}
+
+func TestDistinctRoots_RepeatedMissingRootCountsOnce(t *testing.T) {
+	root := t.TempDir()
+	missing := filepath.Join(root, "missing")
+	assert.Equal(t, []string{missing}, distinctRoots([]string{missing, missing}))
+	dangling := filepath.Join(root, "dangling")
+	if err := os.Symlink(filepath.Join(root, "nowhere"), dangling); err != nil {
+		t.Skipf("symlinks unsupported here: %v", err)
+	}
+	assert.Equal(t, []string{dangling}, distinctRoots([]string{dangling, dangling}))
+}

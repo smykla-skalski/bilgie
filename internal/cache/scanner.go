@@ -223,7 +223,7 @@ func distinctRoots(paths []string) []string {
 	var kept []root
 	for _, r := range roots {
 		covered := slices.ContainsFunc(kept, func(k root) bool {
-			if r.info != nil && k.info != nil && os.SameFile(r.info, k.info) {
+			if sameRoot(r.key, k.key, r.info, k.info) {
 				return k.dir == r.dir
 			}
 			if !k.dir {
@@ -251,6 +251,21 @@ func distinctRoots(paths []string) []string {
 		out[i] = k.path
 	}
 	return out
+}
+
+// sameRoot reports whether two resolved roots are one place. Directories are
+// compared by file identity, so spellings that differ in case match on a
+// case-insensitive volume. A file also needs a path equal up to case: hard
+// links to one inode are separate roots, because removing one link frees
+// nothing while the other stays. Roots that cannot be stat'ed compare by path.
+func sameRoot(a, b string, ai, bi os.FileInfo) bool {
+	if ai == nil || bi == nil {
+		return a == b
+	}
+	if !os.SameFile(ai, bi) {
+		return false
+	}
+	return ai.IsDir() || strings.EqualFold(a, b)
 }
 
 // compareBool orders false before true.
