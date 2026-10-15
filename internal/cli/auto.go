@@ -218,15 +218,17 @@ func (e autoEnv) pass(ctx context.Context, cfg *config.Config, dryRun bool, opts
 		Predicted:   opts.predicted,
 	})
 	clearsFirstRun := forced && err == nil && report.Previewed() && report.Err() == nil
+	var clearErr error
+	if clearsFirstRun {
+		clearErr = auto.ClearFirstRun(e.stateDir)
+		clearsFirstRun = clearErr == nil
+	}
 	e.recordRun(ctx, cfg.Auto, report, err, opts.preview, clearsFirstRun)
 	if err != nil {
 		return err
 	}
-
-	if clearsFirstRun {
-		if clearErr := auto.ClearFirstRun(e.stateDir); clearErr != nil {
-			return clearErr
-		}
+	if clearErr != nil {
+		return clearErr
 	}
 	return report.Err()
 }
@@ -240,9 +242,9 @@ func (e autoEnv) clock() time.Time {
 
 // recordRun notifies when space is still low, appends the run record and
 // stores the pass state the tick schedules from. The dry-run that completes
-// the first-run preview and a run that was interrupted or failed before
-// finishing are not stamped as done, so they never delay the next real pass. None of these failures
-// changes the run's outcome: they are reported and the run keeps its own result.
+// the first-run preview, once it cleared the marker, and a run that was
+// interrupted or failed before finishing are not stamped as done, so they
+// never delay the next real pass. None of these failures changes the run's outcome: they are reported and the run keeps its own result.
 func (e autoEnv) recordRun(ctx context.Context, cfg config.Auto, report auto.Report, runErr error, preview, clearsFirstRun bool) {
 	pass, err := auto.ReadPassState(e.stateDir)
 	e.healState(auto.PassStateName, err, preview)
