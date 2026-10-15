@@ -5,9 +5,9 @@ Developer cache manager for macOS, Linux and Windows with configurable size limi
 ## Project Structure
 
 ```
-cmd/bilgie/     - CLI entrypoint
+cmd/bilgie/           - CLI entrypoint
 internal/
-  appname/            - Single source of the project name (Name) and its pre-rename value (Legacy)
+  appname/            - Single source of the project name (Name)
   cache/              - Cache size scanning
   auto/               - Free-space tiers, tick decision (cooldowns, hysteresis, forecast), auto run, per-OS scheduler (launchd, systemd/cron, schtasks), notifiers, first-run marker (Arm and Disarm flip it under the run lock)
   cli/                - Cobra command implementations (status, clean, config, tick, auto, history, doctor, discover, install-agent, arm, disarm)
@@ -15,24 +15,22 @@ internal/
   report/             - Concise per-provider summaries (text and JSON summary objects) for clean and auto
   doctor/             - Pure health checks behind `bilgie doctor` (agent, last run, free-space trend, swap and memory, config, notifier)
   config/             - Config loading, defaults, validation
-  migrate/            - First-run move of ~/.config and ~/.local/state dirs from the legacy name
+  fsx/                - Reads of user-controlled paths that never block on a FIFO, socket or device
   osshim/             - Per-OS shims (lock, process list, kill tree, open files, free space, memory and swap)
-  provider/           - Provider interface + implementations (command, file, docker)
+  provider/           - Provider interface + implementations (see Provider Types)
 pkg/size/             - Human-readable size parsing/formatting
 ```
 
 Names derived from the project name (binary, config and state dirs, launchd label, systemd unit,
-cron tag, Task Scheduler task, notifier title) come from `appname.Name`. The pre-rename values live
-in `appname.Legacy` and are used only by `migrate` and by the legacy cleanup in `install-agent` and
-`uninstall-agent`; never hardcode either name elsewhere.
+cron tag, Task Scheduler task, notifier title) come from `appname.Name`; never hardcode the name elsewhere.
 
 ## Tech Stack
 
-**Language:** Go 1.25 source (`go` directive); 1.26.3 toolchain
+**Language:** Go 1.26 source (`go` directive); 1.27.2 toolchain (`go.mod`, `.mise.toml`)
 **CLI Framework:** Cobra + Viper
 **Terminal UI:** Lipgloss (tables, styling)
 **Testing:** testify (assert/require)
-**Linting:** golangci-lint (errcheck, govet, staticcheck, gosec, gocritic)
+**Linting:** golangci-lint 2.x, linter set in `.golangci.yml`
 **Dependency Mgmt:** mise
 
 ## Development Workflow
@@ -74,15 +72,34 @@ go test -run TestScanProvider ./... # specific test
 go test -v -race ./...              # with race detection
 ```
 
+`TestRunHistory_ReadsStateDirUnderHome` fails locally when `GOTMPDIR` is exported as an uncleaned path (for example `//` from `mktemp -d "$TMPDIR/..."` with a trailing-slash `TMPDIR`): `t.TempDir()` keeps the `//`, the state dir is cleaned, and the prefix check breaks. Unset `GOTMPDIR` or export a cleaned absolute path.
+
 ## Architecture
 
 ### Provider Types
 
+`NewProvider` in `internal/provider/registry.go` picks the type; a name it does not special-case needs `clean_cmd` (Command).
+
 | Type | Clean Method | Example |
 |------|--------------|---------|
-| Command | Executes `clean_cmd` | go, npm, homebrew |
-| File | Deletes files directly | uv, jetbrains |
-| Docker | Special docker prune | docker (checks daemon) |
+| Command | Full mode runs `clean_cmd` (bounded by `clean_timeout`, default 2m); smart mode trims files by `max_age`, then `max_size` | go-build, homebrew |
+| File | Deletes files directly; `skip_if_open` leaves paths with open files alone | gh, app-updaters, copilot, golangci-lint, node-gyp |
+| Tree | Deletes whole trees only (`treeSpecs` in `tree.go`), never inside one | npm, cargo, yarn, gradle, go-mod, xcode-* |
+| Entry | Evicts whole top-level entries, oldest first, to `max_size` only; `skip_prefixes` protects names | huggingface, playwright, lima, chrome-devtools-mcp |
+| Docker | Docker prune, skipped when the daemon is down; `docker-volumes` is a separate opt-in | docker, docker-volumes |
+| Dir pattern | `type: dir-pattern`: removes stale directories matching globs after `min_idle`; skips matches with open files, `.git`, or (`owner_marker`) no owner marker | sail-dirs, agent-scratch-dirs, sail-e2e-dirs |
+| Project artifacts | `type: project-artifacts`: removes build artifacts of idle projects under the project roots | project-artifacts |
+| Custom | Own implementation | mise (`mise prune`), uv (`uv cache clean`), rustup, jetbrains, sqlite-compact (VACUUM of listed databases), codex-sessions (rollouts older than `max_age`, ignores `max_size`) |
+
+Disabled by default (opt-in): dir-pattern providers, uv, sqlite-compact, codex-sessions, rustup, huggingface, playwright, chrome-devtools-mcp, docker-volumes.
+
+### Auto Tiers and Budgets
+
+- Pressure tiers (`internal/auto/tier.go`): ok (trim only providers over their limit), low (trim all enabled), critical (shorter cooldown; sweeps disabled dir-pattern providers with `sweep_tier: critical`, default sail-dirs), emergency (sweeps all stale directories).
+- `sweep_tier` (`critical` or `emergency`, default `emergency`) is valid only on dir-pattern providers.
+- `uvx_min_age` (uv only, default 1h): a running uvx process older than this stops blocking uv; only environments no running process uses are swept.
+- Per-provider run budget (`auto.ProviderBudget`, 10m, not a config key): a provider that outlives it is reported as timed out and the pass goes on.
+- project-artifacts has its own `scan_budget` (default 10s) and `pass_budget` (default 30s).
 
 ### Provider Interface
 
@@ -173,18 +190,20 @@ bilgie disarm  # clear it: the next real pass deletes
 
 Before committing:
 
-- [ ] `golangci-lint run` passes
+- [ ] `mise run lint` passes
 - [ ] `go test -race ./...` passes
 - [ ] `go build ./cmd/bilgie` succeeds
 - [ ] `mise run vuln` (govulncheck) reports no vulnerabilities
 - [ ] Manual test of changed commands
 
 ```bash
-golangci-lint run
+mise run lint   # or: mise exec -- golangci-lint run
 go test -race ./...
 go build -o bilgie ./cmd/bilgie
 mise run vuln
 ```
+
+Bare `golangci-lint run` fails: the binary on PATH can be built with an older Go than the toolchain `go.mod` pins ("Go language version used to build golangci-lint is lower than the targeted Go version"). Tasks in `.mise.toml` run with the pinned tools.
 
 ## Common Commands
 
@@ -205,8 +224,8 @@ go test -coverprofile=coverage.out ./...
 go tool cover -html=coverage.out
 
 # Linting
-golangci-lint run
-golangci-lint run --fix
+mise run lint
+mise exec -- golangci-lint run --fix
 ```
 
 ## Testing Patterns
