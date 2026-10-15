@@ -3,8 +3,10 @@ package auto
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -160,6 +162,101 @@ func TestFindGitMarker_UnreadableSubdirIsSkippedAndSiblingsScanned(t *testing.T)
 			assert.Equal(t, filepath.Join(root, tt.wantPath), res.detail)
 		})
 	}
+}
+
+type faultyDir struct {
+	entries []os.DirEntry
+	err     error
+}
+
+func (d *faultyDir) ReadDir(int) ([]os.DirEntry, error) { return d.entries, d.err }
+func (d *faultyDir) Close() error                       { return nil }
+
+func TestFindGitMarker_PermissionErrorsSkipOnlySubdirectories(t *testing.T) {
+	denied := &fs.PathError{Op: "open", Path: "x", Err: fs.ErrPermission}
+	broken := errors.New("input/output error")
+	tests := []struct {
+		name     string
+		fault    func(rel string) (dirReader, error)
+		want     markerOutcome
+		wantPath string
+	}{
+		{
+			name:  "subdir open denied",
+			fault: func(rel string) (dirReader, error) { return nil, onlyAt(rel, "a", denied) },
+			want:  markerFound, wantPath: "b",
+		},
+		{
+			name:  "subdir read denied after entries",
+			fault: func(rel string) (dirReader, error) { return readFault(rel, "a", denied), nil },
+			want:  markerFound, wantPath: "b",
+		},
+		{
+			name:  "subdir open fails otherwise",
+			fault: func(rel string) (dirReader, error) { return nil, onlyAt(rel, "a", broken) },
+			want:  markerUnreadable,
+		},
+		{
+			name:  "subdir read fails otherwise",
+			fault: func(rel string) (dirReader, error) { return readFault(rel, "a", broken), nil },
+			want:  markerUnreadable,
+		},
+		{
+			name:  "root open denied",
+			fault: func(rel string) (dirReader, error) { return nil, onlyAt(rel, ".", denied) },
+			want:  markerUnreadable,
+		},
+		{
+			name:  "root read denied",
+			fault: func(rel string) (dirReader, error) { return readFault(rel, ".", denied), nil },
+			want:  markerUnreadable,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			old := openDir
+			openDir = func(path string) (dirReader, error) {
+				rel, err := filepath.Rel(root, path)
+				if err != nil {
+					return nil, err
+				}
+				rel = filepath.ToSlash(rel)
+				if d, ferr := tt.fault(rel); ferr != nil || d != nil {
+					return d, ferr
+				}
+				switch rel {
+				case ".":
+					return &fakeDir{entries: []os.DirEntry{fakeEntry{name: "a", dir: true}, fakeEntry{name: "b", dir: true}}}, nil
+				case "b":
+					return &fakeDir{entries: []os.DirEntry{fakeEntry{name: ".git", dir: true}}}, nil
+				}
+				return &fakeDir{}, nil
+			}
+			t.Cleanup(func() { openDir = old })
+
+			res := findGitMarker(t.Context(), root, markerLimits)
+
+			assert.Equal(t, tt.want, res.outcome)
+			if tt.wantPath != "" {
+				assert.Equal(t, filepath.Join(root, tt.wantPath), res.detail)
+			}
+		})
+	}
+}
+
+func onlyAt(rel, target string, err error) error {
+	if rel == target {
+		return err
+	}
+	return nil
+}
+
+func readFault(rel, target string, err error) dirReader {
+	if rel != target {
+		return nil
+	}
+	return &faultyDir{entries: []os.DirEntry{fakeEntry{name: "file"}}, err: err}
 }
 
 func TestFindGitMarker_LimitsReportTooLargeWithPath(t *testing.T) {
