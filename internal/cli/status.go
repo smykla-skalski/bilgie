@@ -147,9 +147,20 @@ func runStatusInDir(loader *config.Loader, jsonOutput bool, scan unmanagedScan, 
 		return fmt.Errorf("load config: %w", err)
 	}
 
+	var mode *AgentMode
+	if stateDir != "" {
+		mode = agentModeOf(stateDir)
+	}
+
 	providers := cfg.EnabledProviders()
 	if len(providers) == 0 {
+		if jsonOutput && mode != nil {
+			return outputJSONWithMode(nil, nil, nil, mode)
+		}
 		fmt.Println("No enabled providers")
+		if mode != nil && !jsonOutput {
+			fmt.Println(dimStyle.Render(mode.line()))
+		}
 		if protect != nil && !jsonOutput {
 			outputProtected(protect(context.Background(), cfg))
 		}
@@ -177,10 +188,6 @@ func runStatusInDir(loader *config.Loader, jsonOutput bool, scan unmanagedScan, 
 	statuses := scanProviders(ctx, cfg, providers)
 	wg.Wait()
 
-	var mode *AgentMode
-	if stateDir != "" {
-		mode = agentModeOf(stateDir)
-	}
 	if jsonOutput {
 		return outputJSONWithMode(statuses, unmanaged, protected, mode)
 	}
@@ -271,6 +278,9 @@ func outputJSONWithMode(statuses []ProviderStatus, unmanaged *auto.UnmanagedRepo
 	var total int64
 	for i := range statuses {
 		total += statuses[i].Current
+	}
+	if statuses == nil {
+		statuses = []ProviderStatus{}
 	}
 
 	out := StatusOutput{

@@ -51,6 +51,16 @@ func TestArmDisarmCommands_FailWhileAPassRuns(t *testing.T) {
 	assert.False(t, auto.FirstRunPending(f.env.stateDir))
 }
 
+func TestArmDisarmCommands_ReportAStateDirThatCannotBeUsed(t *testing.T) {
+	f := newAutoFixture(t, 100*autoGiB, "")
+	require.NoError(t, os.WriteFile(f.env.stateDir, []byte("a file, not a directory"), 0o600))
+
+	armErr := runArmWithEnv(f.env)
+	require.ErrorContains(t, armErr, "arm: ")
+	require.NotErrorIs(t, armErr, auto.ErrPassRunning)
+	require.ErrorContains(t, runDisarmWithEnv(f.env), "disarm: ")
+}
+
 func TestArmDisarmCommands_TakeNoArguments(t *testing.T) {
 	require.Error(t, ArmCmd.Args(ArmCmd, []string{"extra"}))
 	require.Error(t, DisarmCmd.Args(DisarmCmd, []string{"extra"}))
@@ -222,4 +232,104 @@ func TestStatus_WithoutAStateDirOmitsTheAgentMode(t *testing.T) {
 	output = captureStdout(t, func() { err = runStatusWithLoader(loader, false, nil, nil) })
 	require.NoError(t, err)
 	assert.NotContains(t, output, "Agent mode")
+}
+
+func noProviderConfig(t *testing.T) *config.Loader {
+	t.Helper()
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte(`version: "1"
+providers:
+  off:
+    enabled: false
+    paths:
+      - /tmp
+    max_size: 1GB
+`), 0o600))
+	loader := config.NewLoader()
+	loader.SetConfigPath(cfgPath)
+	loader.SkipDefaults()
+	return loader
+}
+
+func TestStatus_NoEnabledProvidersStillReportsTheAgentMode(t *testing.T) {
+	loader := noProviderConfig(t)
+	stateDir := filepath.Join(t.TempDir(), "state")
+	_, err := auto.Arm(stateDir)
+	require.NoError(t, err)
+
+	output := captureStdout(t, func() { err = runStatusInDir(loader, false, nil, nil, stateDir) })
+	require.NoError(t, err)
+	assert.Contains(t, output, "No enabled providers")
+	assert.Contains(t, output, "Agent mode: preview")
+
+	output = captureStdout(t, func() { err = runStatusInDir(loader, true, nil, nil, stateDir) })
+	require.NoError(t, err)
+	var out StatusOutput
+	require.NoError(t, json.Unmarshal([]byte(output), &out))
+	assert.Empty(t, out.Providers)
+	assert.Contains(t, output, `"providers": []`)
+	require.NotNil(t, out.AgentMode)
+	assert.True(t, out.AgentMode.Armed)
+
+	output = captureStdout(t, func() { err = runStatusWithLoader(loader, true, nil, nil) })
+	require.NoError(t, err)
+	assert.Equal(t, "No enabled providers\n", output, "without a state dir the legacy text stays")
+}
+
+// homeWithConfig points HOME at a directory whose config enables one
+// provider, so the real command wiring (config path, state dir) is used.
+func homeWithConfig(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	cfgDir := filepath.Join(home, ".config", "bilgie")
+	require.NoError(t, os.MkdirAll(cfgDir, 0o750))
+	cacheDir := filepath.Join(home, "cache")
+	require.NoError(t, os.MkdirAll(cacheDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(cfgDir, "config.yaml"), []byte(`version: "1"
+providers:
+  modetest:
+    enabled: true
+    paths:
+      - `+cacheDir+`
+    max_size: 1GB
+    clean_cmd: echo
+`), 0o600))
+	return home
+}
+
+func TestArmDisarmStatus_ThroughTheRealCommandWiring(t *testing.T) {
+	home := homeWithConfig(t)
+	marker := filepath.Join(home, ".local", "state", "bilgie", "first-run-pending")
+
+	require.NoError(t, runArm(ArmCmd, nil))
+	assert.FileExists(t, marker)
+
+	statusMode := func() *AgentMode {
+		t.Helper()
+		require.NoError(t, StatusCmd.Flags().Set("json", "true"))
+		require.NoError(t, StatusCmd.Flags().Set("unmanaged", "0"))
+		t.Cleanup(func() {
+			for _, name := range []string{"json", "unmanaged"} {
+				_ = StatusCmd.Flags().Set(name, StatusCmd.Flags().Lookup(name).DefValue)
+			}
+		})
+		var err error
+		output := captureStdout(t, func() { err = runStatus(StatusCmd, nil) })
+		require.NoError(t, err)
+		var out StatusOutput
+		require.NoError(t, json.Unmarshal([]byte(output), &out), output)
+		return out.AgentMode
+	}
+	mode := statusMode()
+	require.NotNil(t, mode)
+	assert.True(t, mode.Armed)
+
+	require.NoError(t, runDisarm(DisarmCmd, nil))
+	assert.NoFileExists(t, marker)
+	mode = statusMode()
+	require.NotNil(t, mode)
+	assert.False(t, mode.Armed)
+	assert.Equal(t, "acting", mode.Mode)
 }

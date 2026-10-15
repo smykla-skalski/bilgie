@@ -78,3 +78,25 @@ func TestDisarm_ReportsAnUnremovableMarker(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, FirstRunPending(dir), "a marker that cannot be removed keeps deletion off")
 }
+
+func TestArmDisarm_FailWhenTheStateDirIsNotADirectory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state")
+	require.NoError(t, os.WriteFile(path, []byte("x"), 0o600))
+
+	_, err := Arm(path)
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, ErrPassRunning)
+	_, err = Disarm(path)
+	require.Error(t, err)
+}
+
+func TestArm_FailsWhenTheMarkerIsADirectory(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(dir, firstRunMarker), 0o750))
+
+	changed, err := Arm(dir)
+
+	require.Error(t, err)
+	assert.False(t, changed)
+	assert.True(t, FirstRunPending(dir))
+}
