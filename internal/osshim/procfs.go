@@ -76,6 +76,55 @@ func parentPID(base string) int {
 	return ppid
 }
 
+// clockTicksPerSecond is the unit of the start time in a /proc stat file. It is
+// 100 on every Linux architecture bilgie supports.
+const clockTicksPerSecond = 100
+
+// bootTime reads the system boot time from a /proc-style root's stat file;
+// zero when it is missing.
+func bootTime(root string) time.Time {
+	stat, err := os.ReadFile(filepath.Join(root, "stat"))
+	if err != nil {
+		return time.Time{}
+	}
+	for line := range strings.SplitSeq(string(stat), "\n") {
+		if rest, ok := strings.CutPrefix(line, "btime "); ok {
+			secs, convErr := strconv.ParseInt(strings.TrimSpace(rest), 10, 64)
+			if convErr != nil || secs <= 0 {
+				return time.Time{}
+			}
+			return time.Unix(secs, 0)
+		}
+	}
+	return time.Time{}
+}
+
+// startTime is when the process in a /proc stat file began, from its start
+// tick (field 22) counted from boot. Zero when either is unknown.
+func startTime(base string, boot time.Time) time.Time {
+	if boot.IsZero() {
+		return time.Time{}
+	}
+	stat, err := os.ReadFile(filepath.Join(base, "stat"))
+	if err != nil {
+		return time.Time{}
+	}
+	idx := strings.LastIndex(string(stat), ") ")
+	if idx < 0 {
+		return time.Time{}
+	}
+	fields := strings.Fields(string(stat)[idx+2:])
+	const startField = 22 - 3
+	if len(fields) <= startField {
+		return time.Time{}
+	}
+	ticks, err := strconv.ParseInt(fields[startField], 10, 64)
+	if err != nil || ticks < 0 {
+		return time.Time{}
+	}
+	return boot.Add(time.Duration(ticks) * time.Second / clockTicksPerSecond)
+}
+
 // processTableFromProc returns one entry per process under a /proc-style
 // root. The kernel's short name is appended so a process that rewrote its
 // argv is still matched; a kernel thread or zombie has no argv and yields
@@ -86,6 +135,7 @@ func processTableFromProc(ctx context.Context, root string) ([]Process, error) {
 		return nil, err
 	}
 
+	boot := bootTime(root)
 	lines := make([]Process, 0, len(pids))
 	for _, pid := range pids {
 		if err := ctx.Err(); err != nil {
@@ -114,6 +164,7 @@ func processTableFromProc(ctx context.Context, root string) ([]Process, error) {
 			PPID:        parentPID(filepath.Join(root, pid)),
 			CommandLine: strings.TrimSpace(args + " " + name),
 			Args:        args,
+			Started:     startTime(filepath.Join(root, pid), boot),
 		})
 	}
 	return lines, nil

@@ -1,6 +1,9 @@
 package osshim
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Process is one row of a process listing.
 type Process struct {
@@ -9,6 +12,9 @@ type Process struct {
 	CommandLine string
 	// Args is the command line without any appended kernel process name.
 	Args string
+	// Started is when the process began; zero when the platform listing does
+	// not report it.
+	Started time.Time
 }
 
 // ProcessCommandLines returns the command line of every running process.

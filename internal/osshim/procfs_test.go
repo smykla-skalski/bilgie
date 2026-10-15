@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -217,4 +218,59 @@ func TestProcessTableFromProcParentPID(t *testing.T) {
 	assert.Equal(t, 42, byPID[100].PPID)
 	assert.Equal(t, "/usr/bin/go build", byPID[100].Args)
 	assert.Zero(t, byPID[101].PPID, "missing stat is an unknown parent")
+}
+
+func TestProcessTableFromProcStartTime(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "stat"), []byte("cpu  1 2 3\nbtime 1700000000\nprocesses 5\n"), 0o600))
+	base := writeProc(t, root, "100", "/usr/bin/go\x00run\x00", "go")
+	// field 22 (starttime) is the 20th field after the "(comm) " prefix, in ticks since boot
+	require.NoError(t, os.WriteFile(filepath.Join(base, "stat"),
+		[]byte("100 (go (x)) S 42 100 100 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 150050 0 0"), 0o600))
+	writeProc(t, root, "101", "x", "x")
+
+	procs, err := processTableFromProc(t.Context(), root)
+	require.NoError(t, err)
+	byPID := map[int]Process{}
+	for _, p := range procs {
+		byPID[p.PID] = p
+	}
+	assert.Equal(t, time.Unix(1700001500, 500_000_000), byPID[100].Started)
+	assert.True(t, byPID[101].Started.IsZero(), "missing stat is an unknown start")
+}
+
+func TestProcessTableFromProcStartTimeUnknown(t *testing.T) {
+	stat := "100 (go) S 42 100 100 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 150050 0 0"
+	for name, rootStat := range map[string]string{
+		"no boot time":     "",
+		"unparsable btime": "btime soon\n",
+		"non-positive":     "btime 0\n",
+		"no btime line":    "cpu 1 2 3\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			if rootStat != "" {
+				require.NoError(t, os.WriteFile(filepath.Join(root, "stat"), []byte(rootStat), 0o600))
+			}
+			base := writeProc(t, root, "100", "go\x00run\x00", "go")
+			require.NoError(t, os.WriteFile(filepath.Join(base, "stat"), []byte(stat), 0o600))
+			procs, err := processTableFromProc(t.Context(), root)
+			require.NoError(t, err)
+			require.Len(t, procs, 1)
+			assert.True(t, procs[0].Started.IsZero())
+		})
+	}
+
+	t.Run("short or malformed stat", func(t *testing.T) {
+		for _, bad := range []string{"100 (go) S 42", "garbage", "100 (go) S 42 100 100 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 abc 0 0"} {
+			root := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(root, "stat"), []byte("btime 1700000000\n"), 0o600))
+			base := writeProc(t, root, "100", "go\x00run\x00", "go")
+			require.NoError(t, os.WriteFile(filepath.Join(base, "stat"), []byte(bad), 0o600))
+			procs, err := processTableFromProc(t.Context(), root)
+			require.NoError(t, err)
+			require.Len(t, procs, 1)
+			assert.True(t, procs[0].Started.IsZero(), bad)
+		}
+	})
 }

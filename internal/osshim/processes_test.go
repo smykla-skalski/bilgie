@@ -68,3 +68,19 @@ func TestProcessTableReportsSelfAndParent(t *testing.T) {
 	}
 	t.Fatal("own process missing from the process table")
 }
+
+func TestProcessTableReportsStartTime(t *testing.T) {
+	procs, err := ProcessTable(context.Background())
+	require.NoError(t, err)
+
+	for i := range procs {
+		if procs[i].PID != os.Getpid() {
+			continue
+		}
+		require.False(t, procs[i].Started.IsZero(), "own start time must be known")
+		// the test binary started moments ago; allow a wide margin for ps rounding
+		assert.WithinDuration(t, time.Now(), procs[i].Started, 10*time.Minute)
+		return
+	}
+	t.Fatal("own process missing from the process table")
+}
