@@ -1,6 +1,8 @@
 package config
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +13,9 @@ import (
 
 	"github.com/spf13/viper"
 )
+
+// maxConfigBytes bounds the config read; a real file is a few KiB.
+const maxConfigBytes = 8 << 20
 
 // Loader handles config file operations.
 type Loader struct {
@@ -79,16 +84,15 @@ func (l *Loader) Load() (*Config, error) {
 		return nil, err
 	}
 
-	if err := fsx.CheckRegular(configPath); err != nil {
+	data, err := fsx.ReadRegular(configPath, maxConfigBytes)
+	if errors.Is(err, os.ErrNotExist) {
+		return cfg, nil
+	}
+	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
-	l.v.SetConfigFile(configPath)
 	l.v.SetConfigType("yaml")
-
-	if err := l.v.ReadInConfig(); err != nil {
-		if os.IsNotExist(err) {
-			return cfg, nil
-		}
+	if err := l.v.ReadConfig(bytes.NewReader(data)); err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
 
@@ -148,6 +152,9 @@ func (l *Loader) Load() (*Config, error) {
 		}
 		if l.v.IsSet("providers." + name + ".skip_if_git_worktree") {
 			merged.SkipIfGitWorktree = userP.SkipIfGitWorktree
+		}
+		if l.v.IsSet("providers." + name + ".owner_marker") {
+			merged.OwnerMarker = userP.OwnerMarker
 		}
 		mergeProjectArtifacts(l, name, &merged, &userP)
 		// Union, never replace: an empty user list must not strip protections.

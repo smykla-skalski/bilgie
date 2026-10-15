@@ -5,6 +5,7 @@ package osshim
 import (
 	"context"
 	"errors"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -59,7 +60,11 @@ func ProcessTable(ctx context.Context) ([]Process, error) {
 	}
 	procs := make([]Process, 0, len(entries))
 	for i := range entries {
-		procs = append(procs, Process{PID: int(entries[i].pid), PPID: int(entries[i].ppid), CommandLine: entries[i].exe, Args: entries[i].exe})
+		proc := Process{PID: int(entries[i].pid), PPID: int(entries[i].ppid), CommandLine: entries[i].exe, Args: entries[i].exe}
+		if created, err := creationTime(entries[i].pid); err == nil {
+			proc.Started = time.Unix(0, created)
+		}
+		procs = append(procs, proc)
 	}
 	return procs, nil
 }

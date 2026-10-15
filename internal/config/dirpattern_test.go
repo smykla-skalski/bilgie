@@ -103,3 +103,46 @@ func TestEnabledProvidersKeepsMisconfiguredDirPattern(t *testing.T) {
 
 	assert.Equal(t, []string{"broken"}, cfg.EnabledProviders(), "valid providers with no matches stay hidden")
 }
+
+func TestAgentScratchDirsDefaultsToMarkerOnlyAndDisabled(t *testing.T) {
+	loader := NewLoader()
+	loader.SetConfigPath(filepath.Join(t.TempDir(), "config.yaml"))
+	tempDir := t.TempDir()
+	loader.SetPlatform(Platform{OS: OSLinux, TempDir: tempDir})
+
+	cfg, err := loader.Load()
+	require.NoError(t, err)
+
+	scratch := cfg.Providers["agent-scratch-dirs"]
+	assert.False(t, scratch.Enabled)
+	assert.Equal(t, TypeDirPattern, scratch.Type)
+	assert.True(t, scratch.OwnerMarker)
+	assert.Contains(t, scratch.Paths, filepath.Join(tempDir, "*"))
+	require.NoError(t, scratch.DirPatternError())
+	assert.False(t, cfg.Providers["sail-dirs"].OwnerMarker)
+}
+
+func TestLoader_OwnerMarkerOverride(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	yaml := `version: "1"
+providers:
+  agent-scratch-dirs:
+    enabled: true
+    owner_marker: false
+  reef-dirs:
+    type: dir-pattern
+    enabled: true
+    paths: ["/tmp/reef-*"]
+    max_size: 20G
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(yaml), 0o600))
+
+	loader := NewLoader()
+	loader.SetConfigPath(configPath)
+	cfg, err := loader.Load()
+	require.NoError(t, err)
+
+	assert.False(t, cfg.Providers["agent-scratch-dirs"].OwnerMarker, "a user value wins over the default")
+	assert.False(t, cfg.Providers["reef-dirs"].OwnerMarker)
+	assert.Equal(t, []string{"/tmp/reef-*"}, cfg.Providers["reef-dirs"].Paths)
+}

@@ -90,13 +90,13 @@ func AppendRun(stateDir string, rec RunRecord) error {
 		return fmt.Errorf("create state dir: %w", err)
 	}
 	path := filepath.Join(stateDir, RunLogName)
-	if info, statErr := os.Stat(path); statErr == nil && info.Size() >= rotateAt {
+	if info, statErr := os.Lstat(path); statErr == nil && info.Size() >= rotateAt {
 		if err := os.Rename(path, path+".1"); err != nil {
 			return fmt.Errorf("rotate run log: %w", err)
 		}
 	}
 
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_APPEND|os.O_CREATE, 0o600)
+	f, err := fsx.OpenAppendNoLink(path, 0o600)
 	if err != nil {
 		return fmt.Errorf("open run log: %w", err)
 	}
@@ -152,10 +152,7 @@ func ReadRuns(stateDir string, limit int) ([]RunRecord, int, error) {
 }
 
 func readRunFile(path string) ([]RunRecord, int, error) {
-	if err := fsx.CheckRegular(path); err != nil {
-		return nil, 0, fmt.Errorf("open run log: %w", err)
-	}
-	f, err := os.Open(path)
+	f, err := fsx.OpenRegular(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, 0, nil
 	}

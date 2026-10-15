@@ -187,6 +187,7 @@ var providerOSes = map[string][]string{
 	"copilot":           {OSDarwin},
 	"golangci-lint":     {OSDarwin},
 	"node-gyp":          {OSDarwin},
+	"sqlite-compact":    {OSDarwin, OSLinux},
 }
 
 // AppliesOn reports whether the named provider applies on goos. Custom

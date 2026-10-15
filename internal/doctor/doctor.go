@@ -91,6 +91,9 @@ type Input struct {
 	FreeErr error
 
 	FirstRunPending bool
+	// LinkedPaths are state files or the log directory that are symbolic
+	// links; bilgie refuses to write through them.
+	LinkedPaths []string
 
 	// MemRead is set when memory was sampled; MemErr says why it could not be.
 	// Families and FamiliesErr are only filled while swap is above the threshold.
@@ -136,6 +139,7 @@ func (r Report) Attention() int {
 // Diagnose runs every check.
 func Diagnose(in Input) Report {
 	findings := []Finding{agentFinding(in)}
+	findings = append(findings, linkFindings(in)...)
 	findings = append(findings, cadenceFindings(in)...)
 	findings = append(findings, lastRunFindings(in)...)
 	findings = append(findings, freeSpaceFindings(in)...)
@@ -167,6 +171,18 @@ func agentFinding(in Input) Finding {
 		f.Message = fmt.Sprintf("installed and loaded (%s)", in.Agent.Backend)
 	}
 	return f
+}
+
+func linkFindings(in Input) []Finding {
+	out := make([]Finding, 0, len(in.LinkedPaths))
+	for _, p := range in.LinkedPaths {
+		out = append(out, Finding{
+			Area: "state", Level: Warn,
+			Message: p + " is a symbolic link: bilgie refuses to write through it",
+			Hint:    "delete the link, then run: bilgie install-agent",
+		})
+	}
+	return out
 }
 
 // tickStaleFactor missed ticks mean the scheduler is not running the agent.

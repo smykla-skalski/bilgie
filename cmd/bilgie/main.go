@@ -22,6 +22,7 @@ configured level, pumps caches out below it and sweeps hard at the critical leve
 It manages developer caches on macOS, Linux and Windows with configurable size limits.`,
 	Args:          cobra.NoArgs,
 	SilenceErrors: true,
+	SilenceUsage:  true,
 	RunE:          runRoot,
 }
 

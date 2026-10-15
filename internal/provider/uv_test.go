@@ -50,7 +50,7 @@ func newUVProvider(t *testing.T, cfg config.Provider) *UVProvider {
 	p, err := NewUVProvider("uv", cfg)
 	require.NoError(t, err)
 	p.lockPath = filepath.Join(t.TempDir(), "uv.lock")
-	p.busy.listProcesses = func(context.Context) ([]string, error) { return nil, nil }
+	p.busy.listProcesses = listOf()
 	return p
 }
 
@@ -168,9 +168,7 @@ func TestUVProvider_SkipsWhenUVRunning(t *testing.T) {
 	log := filepath.Join(t.TempDir(), "calls")
 	installFakeTool(t, "uv", fakeToolSpec{Default: fakeReply{Log: log}})
 	p := newUVProvider(t, config.Provider{Paths: []string{dir}})
-	p.busy.listProcesses = func(context.Context) ([]string, error) {
-		return []string{"/usr/local/bin/uv pip install flask"}, nil
-	}
+	p.busy.listProcesses = listOf("/usr/local/bin/uv pip install flask")
 
 	res, err := p.Clean(context.Background(), CleanOptions{Mode: CleanModeSmart})
 	require.NoError(t, err)

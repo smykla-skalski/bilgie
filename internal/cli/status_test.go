@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"io"
 	"os"
@@ -449,4 +450,44 @@ func TestStatus_ListsOnlyProvidersThatApplyOnInjectedOS(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestScanProvider_SQLiteCompactReportsDatabases(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "state.db")
+	hdr := make([]byte, 100)
+	copy(hdr, "SQLite format 3\x00")
+	binary.BigEndian.PutUint16(hdr[16:18], 4096)
+	binary.BigEndian.PutUint32(hdr[28:32], 1000)
+	binary.BigEndian.PutUint32(hdr[36:40], 600)
+	require.NoError(t, os.WriteFile(db, hdr, 0o600))
+
+	cfg := &config.Config{
+		Providers: map[string]config.Provider{
+			"sqlite-compact": {Paths: []string{db}, MaxSize: "1M", Enabled: true},
+		},
+	}
+
+	status := scanProvider(t.Context(), cfg, "sqlite-compact")
+
+	require.Empty(t, status.Error)
+	assert.Equal(t, int64(600*4096), status.Recoverable)
+	require.Len(t, status.Databases, 1)
+	assert.Equal(t, db, status.Databases[0].Path)
+	assert.Equal(t, int64(600*4096), status.Databases[0].Reclaim)
+	assert.Equal(t, int64(1000*4096), status.Databases[0].Bytes)
+}
+
+func TestOutputTable_ListsDatabases(t *testing.T) {
+	statuses := []ProviderStatus{{
+		Name: "sqlite-compact", CurrentFmt: "2.3 GiB", MaxFmt: "1.0 GiB", OverLimit: true,
+		Databases: []DatabaseStatus{
+			{Path: "/data/a.db", Bytes: 4 << 30, Reclaim: 3 << 30, Reclaimable: "3.0 GiB", InUse: true},
+			{Path: "/data/b.db", Bytes: 1 << 30, Reclaim: 0, Reclaimable: "0 B"},
+		},
+	}}
+
+	out := captureStdout(t, func() { require.NoError(t, outputTable(statuses)) })
+
+	assert.Contains(t, out, "sqlite-compact: 3.0 GiB reclaimable of 4.0 GiB (in use) /data/a.db")
+	assert.Contains(t, out, "sqlite-compact: 0 B reclaimable of 1.0 GiB (idle) /data/b.db")
 }

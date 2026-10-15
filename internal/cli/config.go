@@ -16,26 +16,30 @@ import (
 
 // ConfigCmd manages configuration.
 var ConfigCmd = &cobra.Command{
-	Use:   "config",
-	Short: "Manage configuration",
+	Use:          "config",
+	Short:        "Manage configuration",
+	SilenceUsage: true,
 }
 
 var configShowCmd = &cobra.Command{
-	Use:   "show",
-	Short: "Display current configuration",
-	RunE:  runConfigShow,
+	Use:          "show",
+	Short:        "Display current configuration",
+	RunE:         runConfigShow,
+	SilenceUsage: true,
 }
 
 var configInitCmd = &cobra.Command{
-	Use:   "init",
-	Short: "Create default configuration file",
-	RunE:  runConfigInit,
+	Use:          "init",
+	Short:        "Create default configuration file",
+	RunE:         runConfigInit,
+	SilenceUsage: true,
 }
 
 var configEditCmd = &cobra.Command{
-	Use:   "edit",
-	Short: "Open configuration in $EDITOR",
-	RunE:  runConfigEdit,
+	Use:          "edit",
+	Short:        "Open configuration in $EDITOR",
+	RunE:         runConfigEdit,
+	SilenceUsage: true,
 }
 
 func init() {

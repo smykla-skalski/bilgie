@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
@@ -93,8 +92,8 @@ func (a Agent) bootstrap(ctx context.Context) error {
 // installLaunchd writes the plist and loads it, unloading any earlier
 // registration first since bootstrap fails on a job that is already loaded.
 func (a Agent) installLaunchd(ctx context.Context) error {
-	if err := os.MkdirAll(filepath.Dir(a.logPath()), 0o750); err != nil {
-		return fmt.Errorf("create log dir: %w", err)
+	if err := a.makeLogDir(); err != nil {
+		return err
 	}
 	plist, err := RenderPlist(a.Exe, a.Home, a.logPath(), a.Interval)
 	if err != nil {

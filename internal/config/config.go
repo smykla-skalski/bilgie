@@ -309,6 +309,9 @@ type Provider struct {
 	SkipIfOpen *bool `mapstructure:"skip_if_open" yaml:"skip_if_open,omitempty"`
 	// SkipIfGitWorktree guards directory-pattern matches containing .git (default true).
 	SkipIfGitWorktree *bool `mapstructure:"skip_if_git_worktree" yaml:"skip_if_git_worktree,omitempty"`
+	// OwnerMarker limits a directory-pattern sweep to matches that carry an
+	// owner marker file, whatever their names.
+	OwnerMarker bool `mapstructure:"owner_marker" yaml:"owner_marker,omitempty"`
 	// SkipPrefixes lists entry-name prefixes that whole-entry providers never evict.
 	SkipPrefixes []string `mapstructure:"skip_prefixes" yaml:"skip_prefixes,omitempty"`
 

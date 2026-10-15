@@ -137,11 +137,13 @@ Providers are auto-detected — only tools installed on your system appear in th
 | copilot (macOS only) | 1G | file-based; skips paths with open files |
 | golangci-lint (macOS only) | 1G | file-based; skips paths with open files |
 | node-gyp (macOS only) | 1G | file-based; skips paths with open files |
+| agent-scratch-dirs (disabled by default; every OS temp-dir child that carries an owner marker) | 20G | whole-directory; owner, idle, open-file and `.git` checks |
 | sail-e2e-dirs (disabled by default; `~/Library/Caches/dev.smykla.sail.e2e.*`, macOS only) | 5G | whole-directory; idle, open-file and `.git` checks (git data inside the directory is fine) |
 | **Project artifacts** | | |
 | project-artifacts (Rust `target`, `node_modules`, Python venvs of idle projects) | 20G | whole-directory, oldest project first |
 | **Toolchains** | | |
 | rustup (disabled by default; once over the limit uninstalls every toolchain except `stable`, default, active and directory-override ones) | 10G | `rustup toolchain uninstall` |
+| sqlite-compact (disabled by default; lists SQLite database files, `max_size` is the free-page size that triggers `VACUUM`) | 1G | `VACUUM`; see [sqlite-compact](#sqlite-compact) |
 
 ### Project artifacts
 
@@ -444,6 +446,12 @@ the command to install into `~/.config`. `StartInterval` is a 32-bit number of s
 files and the first-run marker, and succeeds when nothing is installed; on Linux it clears both
 the systemd units and the crontab line.
 
+CI installs the real agent, waits for the scheduler to run one tick and uninstalls it on Linux
+(systemd user timer and the cron fallback) and on Windows (Task Scheduler). Windows CI also deletes
+through directory junctions and symlinks and checks the target stays intact. Not covered by CI: the
+macOS launchd agent (a hosted runner has no GUI login session to bootstrap into), and a Windows task
+that fires from the schedule rather than `Start-ScheduledTask`. See `scripts/ci`.
+
 Every run appends one JSON line to `~/.local/state/bilgie/runs.jsonl`: time, tier, free space
 before and after, swap in use (`swap_used_mib`, left out when it could not be read), bytes freed per provider,
 and skipped providers with their reasons. The history table shows swap in its SWAP column, so the trend is
@@ -566,6 +574,7 @@ providers:
 | `min_idle` | `dir-pattern`: minimum idle time, from the newest mtime in the tree (default `2h`); `project-artifacts`: project idle time (default `7d`); units `m`, `h`, `d`, minimum `1m` |
 | `trim_idle` | `project-artifacts`: Rust build units (`.fingerprint`, `build`, `deps`, `incremental`) unused for this long are removed from the `target/` of an active project; a profile whose `.cargo-lock` is held is skipped, and dry-run lists the bytes it would trim (default `30d`; units `m`, `h`, `d`, minimum `1m`) |
 | `skip_if_open` | `dir-pattern`, `project-artifacts`: skip directories with open files via `lsof +D` (default `true`) |
+| `owner_marker` | `dir-pattern`: only sweep matches that carry an owner marker file (default `false`; `agent-scratch-dirs` sets `true`) |
 | `skip_if_git_worktree` | `dir-pattern`: skip directories whose `.git` entries reach outside them (default `true`) |
 | `max_depth` | `project-artifacts`: directory levels searched below each root (default `4`, from 1 to 16; a negative value is an error) |
 | `pass_budget` | `project-artifacts`: time one clean pass may spend before the remaining candidates are skipped (default `30s`; units `ms`, `s`, `m`, `h`, `d`) |
@@ -665,6 +674,41 @@ from a deliberate choice, so set `enabled: false` to turn it off in an existing 
   `provider uv: clean_cmd must be ...`, so remove it.
 - Busy guard: skipped while `<path>/.lock` is flock-held or a `uv` process runs.
 
+### sqlite-compact
+
+`sqlite-compact` shrinks SQLite databases that hold a lot of free pages, such as the opencode
+state database (`~/.local/share/opencode/opencode.db`). SQLite never returns free pages to the
+filesystem on its own. The provider deletes no file; it runs `VACUUM` through the `sqlite3`
+binary on `PATH`. It is off by default. Enable it with `providers.sqlite-compact.enabled: true`
+and list the database files in `paths` (no globs).
+
+A database is compacted only when all of these hold; otherwise it is skipped with the reason:
+
+- No process has the database, its `-wal` or `-shm` file open (checked with `lsof`; if the
+  check fails, the database counts as in use).
+- Free pages exceed both `max_size` (default `1G`) and half of the file.
+- Free disk space is at least the size of the live data, because `VACUUM` writes a full copy.
+- `sqlite3` is found on `PATH`.
+
+`VACUUM` builds a copy and swaps it in at commit, so a failed or interrupted run leaves the
+original database intact. After each run bilgie checks `PRAGMA integrity_check` and warns if it
+does not return `ok`. `--dry-run` lists what would be compacted and runs nothing.
+
+`status` reports the free-page bytes of every listed database, including one that is in use,
+read from the database header. The provider's current size is that total. `--json` adds a
+`databases` list with `path`, `bytes`, `reclaimable_bytes` and `in_use`. The header can lag
+while a WAL is not yet checkpointed.
+
+To compact by hand: quit every process that uses the database, check that free disk space
+exceeds the live data (file size minus free pages), then run:
+
+```bash
+sqlite3 ~/.local/share/opencode/opencode.db 'VACUUM;'
+sqlite3 ~/.local/share/opencode/opencode.db 'PRAGMA integrity_check;'
+```
+
+Switching `auto_vacuum` to incremental needs one full `VACUUM` as well; bilgie does not change it.
+
 ### mise
 
 `mise` is a command-managed provider: mise decides what goes, bilgie never deletes inside
@@ -709,13 +753,21 @@ failure. If the check itself fails, the provider is skipped too.
 
 | Provider | Skipped while |
 |----------|---------------|
-| `go-build`, `go-mod` | a `go` process runs |
+| `go-build`, `go-mod` | a `go` process runs, except a `go run` or `go test` that has been up for an hour or more (see below) |
 | `cargo` | `<cargo home>/.package-cache` or `.package-cache-mutate` is flock-held (a running build does not block) |
 | `gradle` | a `gradle` or `gradlew` process, or a Gradle daemon, runs |
 | `homebrew` | a `brew` process runs |
 | `yarn` | a `yarn` process runs (`yarn`, `yarn.js`, `yarnpkg`; any OS) |
 | `uv` | `<path>/.lock` is flock-held, or a `uv` process runs |
 | `mise` | a `mise` process runs `install`, `upgrade`, `prune` or `use` |
+
+A `go run` or `go test` process stays alive for as long as the program or test
+binary it started, long after its compile used the caches, so one that has been up
+for an hour or more no longer blocks `go-build` or `go-mod`. `go build`, `go mod
+download`, `go install` and every other `go` command block at any age, and so does
+`go -C <dir> ...` (the directory may hold spaces, so the subcommand is ambiguous) and a `go` process whose subcommand or start time cannot be read. On Windows the process
+listing carries image names only, so no `go` process ages out there. A skip names the blocking process, for example
+`go is running (pid 4242, up 3m12s)`.
 
 Busy detection errs toward skipping: any process whose command line contains
 the tool name counts, including wrappers such as `sudo` or `sh -c` (`mise` and `cargo`
@@ -782,6 +834,45 @@ despite holding `.git`: `allowed despite 3 .git entries with all git data inside
 `--dry-run` as `would remove`. `auto` leaves the `.git` check of these matches to the provider
 instead of the marker scan described under `auto`, unless `skip_if_git_worktree` is `false`.
 Setting it to `false` turns the check off for `clean`.
+
+### Agent scratch roots
+
+Agents create scratch roots in the temp directory under names of their own (`reef-75.*`,
+`sai-219-ship`, `sail-runtime-<uuid>`). The built-in `agent-scratch-dirs` provider (disabled by
+default, `owner_marker: true`) looks at every child of the OS temp dir and the fixed system temp
+dir, and sweeps only the ones that carry an owner marker, whatever their name. Children without a
+marker are not candidates and are not listed.
+
+The marker is a file named `.sail-scratch-root` directly in the root. Its content is the owner's
+process id and start time in unix seconds, separated by a space:
+
+```text
+75352 1792004192
+```
+
+Sail writes this file. Any other agent can write the same one at startup, with its own pid and
+its real start time. Rules, for every `dir-pattern` provider and every match that carries the marker:
+
+- The owner is running when the pid exists and its start time is within 5 seconds of the marker's.
+  A running owner's root is never removed, and neither is one whose owner cannot be checked.
+- A pid that runs but started at another time was reused: the owner counts as exited.
+- A marker that is missing its fields, has a pid or start that is not a positive number, is larger
+  than 256 bytes, is not a regular file or cannot be read blocks the root. A marker never makes a
+  root eligible on its own: with `owner_marker` a root without a marker is not a candidate, one with
+  a bad marker is listed as skipped, and a root with an exited owner still has to pass the idle,
+  `.git` and open-file checks. `sail-dirs` follows the same rules for the `sail*` roots that carry a marker.
+
+For agents that write no marker, add a `dir-pattern` provider with their name globs:
+
+```yaml
+providers:
+  reef-dirs:
+    type: dir-pattern
+    enabled: true
+    paths: ["/tmp/reef-*"]
+    max_size: 20G
+    min_idle: 24h
+```
 
 ## Building from Source
 
