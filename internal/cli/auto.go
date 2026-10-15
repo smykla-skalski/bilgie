@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/smykla-skalski/bilgie/internal/auto"
@@ -300,7 +301,32 @@ func runInstallAgentWithLoader(ctx context.Context, loader *config.Loader, env a
 	if err != nil {
 		return err
 	}
-	return env.agent(interval).Install(ctx)
+	if err := env.agent(interval).Install(ctx); err != nil {
+		return err
+	}
+	noteSuggestions(ctx, cfg, env)
+	return nil
+}
+
+// suggestBudget bounds the discover lookup after an install, so a slow
+// protection check never delays the command.
+const suggestBudget = 10 * time.Second
+
+// noteSuggestions prints how many providers discover offers to enable. It only
+// suggests: nothing is enabled and a failure here never fails the install.
+func noteSuggestions(ctx context.Context, cfg *config.Config, env autoEnv) {
+	lookPath := env.lookPath
+	if lookPath == nil {
+		lookPath = exec.LookPath
+	}
+	ctx, cancel := context.WithTimeout(ctx, suggestBudget)
+	defer cancel()
+	names := suggestionNames(ctx, cfg, env.home, lookPath, env.newProvider)
+	if len(names) == 0 {
+		return
+	}
+	fmt.Fprintf(env.out, "discover: %d provider(s) could be enabled (%s); nothing was changed, run: bilgie discover\n",
+		len(names), strings.Join(names, ", "))
 }
 
 func runUninstallAgent(_ *cobra.Command, _ []string) error {

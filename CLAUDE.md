@@ -10,7 +10,8 @@ internal/
   appname/            - Single source of the project name (Name) and its pre-rename value (Legacy)
   cache/              - Cache size scanning
   auto/               - Free-space tiers, tick decision (cooldowns, hysteresis, forecast), auto run, per-OS scheduler (launchd, systemd/cron, schtasks), notifiers, first-run marker
-  cli/                - Cobra command implementations (status, clean, config, tick, auto, history, doctor, install-agent)
+  cli/                - Cobra command implementations (status, clean, config, tick, auto, history, doctor, discover, install-agent)
+  discover/           - Read-only suggestions of the providers a machine needs: tiers (regenerable, opt-in, protected), unmanaged-directory entries
   report/             - Concise per-provider summaries (text and JSON summary objects) for clean and auto
   doctor/             - Pure health checks behind `bilgie doctor` (agent, last run, free-space trend, swap and memory, config, notifier)
   config/             - Config loading, defaults, validation
