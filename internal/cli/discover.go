@@ -152,7 +152,10 @@ func runDiscoverWithLoader(ctx context.Context, loader *config.Loader, env disco
 		if out.Config, err = loader.Path(); err != nil {
 			return err
 		}
-		accepted := accept(env, report, flags, len(names) > 0)
+		accepted, err := accept(ctx, env, report, flags, len(names) > 0)
+		if err != nil {
+			return err
+		}
 		if out.Written, err = write(loader, accepted); err != nil {
 			return err
 		}
@@ -186,7 +189,7 @@ func narrow(report *discover.Report, names []string) error {
 		return nil
 	}
 	var kept []discover.Candidate
-	for _, name := range names {
+	for _, name := range uniqueNames(names) {
 		c, ok := findCandidate(report.Candidates, name)
 		switch {
 		case !ok:
@@ -200,6 +203,18 @@ func narrow(report *discover.Report, names []string) error {
 	return nil
 }
 
+func uniqueNames(names []string) []string {
+	seen := make(map[string]bool, len(names))
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		if !seen[name] {
+			seen[name] = true
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
 func findCandidate(cands []discover.Candidate, name string) (discover.Candidate, bool) {
 	i := slices.IndexFunc(cands, func(c discover.Candidate) bool { return c.Name == name })
 	if i < 0 {
@@ -210,35 +225,67 @@ func findCandidate(cands []discover.Candidate, name string) (discover.Candidate,
 
 // accept picks the suggestions to write. With --yes and no names that is every
 // regenerable one; named providers are taken whatever their tier. Without
-// --yes each suggestion is put to the user.
-func accept(env discoverEnv, report discover.Report, flags discoverFlags, named bool) []discover.Candidate {
+// --yes each suggestion is put to the user, and Ctrl-C between or at the
+// prompts ends the run with nothing written.
+func accept(ctx context.Context, env discoverEnv, report discover.Report, flags discoverFlags, named bool) ([]discover.Candidate, error) {
 	offered := report.Suggestions()
 	if flags.yes {
 		if named {
-			return offered
+			return offered, nil
 		}
-		return slices.DeleteFunc(offered, func(c discover.Candidate) bool { return c.Action != discover.ActionEnable })
+		return slices.DeleteFunc(offered, func(c discover.Candidate) bool { return c.Action != discover.ActionEnable }), nil
 	}
 
 	reader := bufio.NewReader(env.in)
 	var accepted []discover.Candidate
 	for i := range offered {
 		c := &offered[i]
+		if err := ctx.Err(); err != nil {
+			return nil, errInterrupted(err)
+		}
 		fmt.Fprintf(env.out, "%s: %s, %s", c.Name, c.Size, c.Tier)
 		if c.Reason != "" {
 			fmt.Fprintf(env.out, " (%s)", c.Reason)
 		}
 		fmt.Fprint(env.out, "\nEnable it? [y/N]: ")
-		answer, err := reader.ReadString('\n')
+		answer, more, err := readAnswer(ctx, reader)
+		if err != nil {
+			return nil, errInterrupted(err)
+		}
 		answer = strings.ToLower(strings.TrimSpace(answer))
 		if answer == "y" || answer == "yes" {
 			accepted = append(accepted, *c)
 		}
-		if err != nil {
+		if !more {
 			break
 		}
 	}
-	return accepted
+	return accepted, nil
+}
+
+func errInterrupted(err error) error {
+	return fmt.Errorf("interrupted, nothing written: %w", err)
+}
+
+// readAnswer reads one line without outliving ctx: a terminal read blocks
+// until Enter, so the read runs aside and Ctrl-C does not wait for it. more is
+// false once the input has ended; the error is only ever the context's.
+func readAnswer(ctx context.Context, r *bufio.Reader) (line string, more bool, err error) {
+	type reply struct {
+		err  error
+		line string
+	}
+	done := make(chan reply, 1)
+	go func() {
+		text, readErr := r.ReadString('\n')
+		done <- reply{line: text, err: readErr}
+	}()
+	select {
+	case got := <-done:
+		return got.line, got.err == nil, ctx.Err()
+	case <-ctx.Done():
+		return "", false, ctx.Err()
+	}
 }
 
 func write(loader *config.Loader, accepted []discover.Candidate) ([]string, error) {
@@ -249,11 +296,7 @@ func write(loader *config.Loader, accepted []discover.Candidate) ([]string, erro
 	for i := range accepted {
 		entries = append(entries, config.Override{Name: accepted[i].Name, Define: accepted[i].Define})
 	}
-	written, err := loader.WriteOverrides(entries)
-	if err != nil {
-		return nil, fmt.Errorf("write config: %w", err)
-	}
-	return written, nil
+	return loader.WriteOverrides(entries)
 }
 
 func printDiscover(w io.Writer, out DiscoverOutput, flags discoverFlags) {
@@ -322,15 +365,28 @@ func printOutcome(w io.Writer, out DiscoverOutput, flags discoverFlags) {
 		fmt.Fprintf(w, "Wrote %d provider(s) to %s: %s\n", len(out.Written), out.Config, strings.Join(out.Written, ", "))
 	case flags.write:
 		fmt.Fprintln(w, "Nothing written.")
-	case hasSuggestion(out.Candidates):
+	case hasAction(out.Candidates, discover.ActionEnable):
 		fmt.Fprintln(w, "Nothing was changed. Enable regenerable ones with: bilgie discover --write --yes")
+		printOptInHint(w, out.Candidates)
+	case hasAction(out.Candidates, discover.ActionOptIn):
+		fmt.Fprintln(w, "Nothing was changed.")
+		printOptInHint(w, out.Candidates)
 	default:
 		fmt.Fprintln(w, "Nothing was changed.")
 	}
 }
 
-func hasSuggestion(cands []discover.Candidate) bool {
-	return slices.ContainsFunc(cands, discover.Candidate.Suggested)
+// printOptInHint names the way to take an opt-in suggestion, which --yes alone
+// never does.
+func printOptInHint(w io.Writer, cands []discover.Candidate) {
+	i := slices.IndexFunc(cands, func(c discover.Candidate) bool { return c.Action == discover.ActionOptIn })
+	if i >= 0 {
+		fmt.Fprintf(w, "Opt-in ones are taken by name or one at a time: bilgie discover --write --yes %s\n", cands[i].Name)
+	}
+}
+
+func hasAction(cands []discover.Candidate, action discover.Action) bool {
+	return slices.ContainsFunc(cands, func(c discover.Candidate) bool { return c.Action == action })
 }
 
 // suggestionNames lists what discover offers for the config, without
