@@ -38,7 +38,7 @@ func realGitProject(t *testing.T, h *artifactHarness, name, gitignore string, fo
 	t.Setenv("GIT_COMMITTER_DATE", old)
 	git := func(args ...string) {
 		t.Helper()
-		full := append([]string{"-C", dir, "-c", "commit.gpgsign=false", "-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)
+		full := append([]string{"-C", dir, "-c", "commit.gpgsign=false", "-c", "gc.auto=0", "-c", "maintenance.auto=false", "-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)
 		out, runErr := exec.Command(gitPath, full...).CombinedOutput()
 		require.NoError(t, runErr, string(out))
 	}
