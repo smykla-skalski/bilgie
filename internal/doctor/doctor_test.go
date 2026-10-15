@@ -139,10 +139,9 @@ func TestDiagnose_Findings(t *testing.T) {
 		{"disabled sweeps", func(in *Input) {
 			in.Cfg = testConfig()
 			in.Cfg.Providers["sail-dirs"] = config.Provider{Type: config.TypeDirPattern, SweepTier: config.SweepTierCritical}
-			in.Cfg.Providers["sail-e2e-dirs"] = config.Provider{Type: config.TypeDirPattern, SweepTier: config.SweepTierCritical}
 			in.Cfg.Providers["agent-scratch-dirs"] = config.Provider{Type: config.TypeDirPattern}
 			in.Cfg.Providers["enabled-dirs"] = config.Provider{Type: config.TypeDirPattern, Enabled: true}
-		}, "sweeps", "disabled but swept under disk pressure: agent-scratch-dirs (emergency), sail-dirs (critical), sail-e2e-dirs (critical)",
+		}, "sweeps", "disabled but swept under disk pressure: agent-scratch-dirs (emergency), sail-dirs (critical)",
 			"sweep_tier: emergency", Note},
 		{"protected conflict", func(in *Input) {
 			in.Conflicts = []auto.Conflict{{Provider: "go", Reason: "protected path /home/u/Downloads/go"}}
@@ -173,6 +172,18 @@ func TestDiagnose_Findings(t *testing.T) {
 			assert.Contains(t, f.Hint, tt.hint)
 		})
 	}
+}
+
+func TestDiagnose_DefaultSweepsOnMacOS(t *testing.T) {
+	in := healthy()
+	in.GOOS = "darwin"
+	in.Cfg = config.DefaultConfigFor(config.Platform{OS: config.OSDarwin, Home: "/Users/u", TempDir: "/private/tmp"})
+
+	f := find(t, Diagnose(in), "sweeps")
+
+	assert.Equal(t, Note, f.Level)
+	assert.Contains(t, f.Message, "agent-scratch-dirs (emergency)")
+	assert.Contains(t, f.Message, "sail-dirs (critical), sail-e2e-dirs (critical)")
 }
 
 func TestDiagnose_AlwaysSkippedProvider(t *testing.T) {
