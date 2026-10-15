@@ -215,6 +215,41 @@ func TestUVProvider_SweepKeepsAnEnvironmentUnderAnAliasWithPunctuation(t *testin
 	f.requireIntact(t, envA, envB)
 }
 
+func TestUVProvider_SweepKeepsAnEnvironmentNamedThroughAnAwkwardAlias(t *testing.T) {
+	resolveNames := []string{"a b c d e f g h i j", "Docs (a, b, c, d) [x]", "x;y;z;a;b;c;d;e;f"}
+	for _, name := range resolveNames {
+		t.Run(name, func(t *testing.T) {
+			f := newSweepFixture(t)
+			resolved, err := filepath.EvalSymlinks(f.dir)
+			require.NoError(t, err)
+			alias := filepath.Join(t.TempDir(), name)
+			require.NoError(t, os.Symlink(resolved, alias))
+			f.setProcs(f.aged, f.serverFor(envA), proc(900, 1, time.Minute, filepath.Join(alias, "archive-v0", envB, "bin", "python")+" job.py"))
+
+			res, err := f.p.Clean(context.Background(), CleanOptions{Mode: CleanModeSmart})
+			require.NoError(t, err)
+			assert.NotEmpty(t, res.SkipReason)
+			f.requireIntact(t, envA, envB)
+		})
+	}
+}
+
+func TestUVProvider_SweepKeepsAnEnvironmentBehindALinkChainAndAControlCharacter(t *testing.T) {
+	f := newSweepFixture(t)
+	dir := t.TempDir()
+	require.NoError(t, os.Symlink(f.envs[envB], filepath.Join(dir, "l2")))
+	require.NoError(t, os.Symlink(filepath.Join(dir, "l2"), filepath.Join(dir, "l1")))
+	f.setProcs(f.aged, f.serverFor(envA))
+	f.p.processEnvs = func(context.Context) ([]osshim.ProcessEnv, error) {
+		return []osshim.ProcessEnv{{PID: 501, Text: "VIRTUAL_ENV=" + filepath.Join(dir, "l1") + "\tx"}}, nil
+	}
+
+	res, err := f.p.Clean(context.Background(), CleanOptions{Mode: CleanModeSmart})
+	require.NoError(t, err)
+	assert.NotEmpty(t, res.SkipReason)
+	f.requireIntact(t, envA, envB)
+}
+
 func TestResolvedPathsFollowEveryAlias(t *testing.T) {
 	target := t.TempDir()
 	resolvedTarget, err := filepath.EvalSymlinks(target)

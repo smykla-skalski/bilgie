@@ -5,10 +5,7 @@ import (
 	"strings"
 )
 
-const (
-	maxCandidate = 1024
-	maxMisses    = 8
-)
+const maxCandidate = 1024
 
 // pathResolver resolves symlinks once per path for one evidence snapshot. A
 // path that does not resolve has no entry, so callers keep its raw spelling.
@@ -64,8 +61,8 @@ func (r *pathResolver) resolvedPaths(text string) []string {
 // one that exists is kept as written: a link the sweep has just removed or a
 // file not created yet still names the directory it lies in.
 func (r *pathResolver) walk(candidate string, add func(string)) {
-	deepest, deepestResolved, misses := "", "", 0
-	for end := 1; end <= len(candidate) && misses < maxMisses; end++ {
+	deepest, deepestResolved := "", ""
+	for end := 1; end <= len(candidate); end++ {
 		slash := end < len(candidate) && candidate[end] == '/'
 		if !slash && end != len(candidate) && !pathEnd(candidate[end]) {
 			continue
@@ -76,13 +73,12 @@ func (r *pathResolver) walk(candidate string, add func(string)) {
 		}
 		if resolved, ok := r.resolve(prefix); ok {
 			add(resolved)
-			deepest, deepestResolved, misses = prefix, resolved, 0
+			deepest, deepestResolved = prefix, resolved
 			continue
 		}
 		if slash {
 			break
 		}
-		misses++
 	}
 	if deepest != "" && len(deepest) < len(candidate) {
 		add(deepestResolved + candidate[len(deepest):])
@@ -116,9 +112,9 @@ func candidateEnd(text string, from int) int {
 }
 
 func pathEnd(b byte) bool {
-	switch b {
-	case ' ', ':', ';', ',', '"', '\'', '=', '(', ')', '<', '>', '|', '`', '$', '&', '[', ']', '{', '}':
-		return true
+	switch {
+	case b >= 'a' && b <= 'z', b >= 'A' && b <= 'Z', b >= '0' && b <= '9', b >= 0x80:
+		return false
 	}
-	return false
+	return b != '.' && b != '_' && b != '-' && b != '+'
 }
