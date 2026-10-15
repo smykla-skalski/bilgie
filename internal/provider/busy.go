@@ -122,8 +122,14 @@ func processLister(wanted []string) func(context.Context) ([]string, error) {
 // processTableLister is processLister with the process rows kept, so a caller
 // can read each one's pid and start time.
 func processTableLister(wanted []string) func(context.Context) ([]osshim.Process, error) {
+	return processTableListerFrom(osshim.ProcessTable, wanted)
+}
+
+// processTableListerFrom is processTableLister over a given process table, so
+// a test can pin the snapshot the listing is built from.
+func processTableListerFrom(table func(context.Context) ([]osshim.Process, error), wanted []string) func(context.Context) ([]osshim.Process, error) {
 	return func(ctx context.Context) ([]osshim.Process, error) {
-		procs, err := osshim.ProcessTable(ctx)
+		procs, err := table(ctx)
 		if err != nil {
 			return nil, err
 		}
