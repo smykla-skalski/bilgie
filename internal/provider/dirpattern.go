@@ -26,15 +26,19 @@ var errRecentEntry = errors.New("entry modified within min_idle")
 const defaultMinIdle = 2 * time.Hour
 
 // DirPatternProvider removes whole stale directories matching a glob.
-// A directory is only removed when it is idle, has no open files and keeps
-// no git data outside itself; every skip is reported with its reason.
+// A directory is only removed when it is idle, has no open files, keeps no
+// git data outside itself and has no running owner named by an owner marker;
+// every skip is reported with its reason.
 type DirPatternProvider struct {
 	*BaseProvider
 	minIdle           time.Duration
 	skipIfOpen        bool
 	skipIfGitWorktree bool
+	ownerMarker       bool
 
 	now func() time.Time
+	// ownerStart answers whether a process runs and when it started.
+	ownerStart func(ctx context.Context, pid int) (time.Time, bool, error)
 	// openMany answers for many directories from one listing of open files.
 	openMany  func(ctx context.Context, dirs []string) (map[string]bool, error)
 	protected []string
@@ -74,8 +78,13 @@ func NewDirPatternProvider(name string, cfg config.Provider) (*DirPatternProvide
 		minIdle:           minIdle,
 		skipIfOpen:        cfg.SkipIfOpen == nil || *cfg.SkipIfOpen,
 		skipIfGitWorktree: cfg.SkipIfGitWorktree == nil || *cfg.SkipIfGitWorktree,
+		ownerMarker:       cfg.OwnerMarker,
 		now:               time.Now,
+		ownerStart:        osshim.ProcessStart,
 		openMany:          osshim.OpenFilesUnder,
+	}
+	if p.ownerMarker {
+		p.paths = slices.DeleteFunc(p.paths, func(path string) bool { return !hasOwnerMarker(path) })
 	}
 
 	p.keep = []string{os.TempDir()}
@@ -311,6 +320,9 @@ func (p *DirPatternProvider) recheckBeforeRemoval(ctx context.Context, dir strin
 	if skipReason != "" {
 		return sc, skipReason
 	}
+	if reason := p.ownerReason(ctx, dir); reason != "" {
+		return sc, reason
+	}
 	return sc, sw.openReason(ctx, dir, openSnapshotTTL)
 }
 
@@ -362,6 +374,10 @@ func (p *DirPatternProvider) evaluate(ctx context.Context, dir string, sw *sweep
 	}
 	if !info.IsDir() {
 		return sc, "not a directory"
+	}
+
+	if reason := p.ownerReason(ctx, dir); reason != "" {
+		return sc, reason
 	}
 
 	if p.skipIfGitWorktree && IsGitMarkerName(filepath.Base(dir)) {

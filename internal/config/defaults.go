@@ -326,6 +326,14 @@ func tempDirProviders(p Platform) map[string]Provider {
 			MaxSize: "20G",
 			MinIdle: "2h",
 		},
+		"agent-scratch-dirs": {
+			Enabled:     false,
+			Type:        TypeDirPattern,
+			Paths:       p.tempGlobs("*"),
+			MaxSize:     "20G",
+			MinIdle:     "2h",
+			OwnerMarker: true,
+		},
 		"sail-e2e-dirs": {
 			Enabled: false,
 			Type:    TypeDirPattern,

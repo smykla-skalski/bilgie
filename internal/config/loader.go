@@ -149,6 +149,9 @@ func (l *Loader) Load() (*Config, error) {
 		if l.v.IsSet("providers." + name + ".skip_if_git_worktree") {
 			merged.SkipIfGitWorktree = userP.SkipIfGitWorktree
 		}
+		if l.v.IsSet("providers." + name + ".owner_marker") {
+			merged.OwnerMarker = userP.OwnerMarker
+		}
 		mergeProjectArtifacts(l, name, &merged, &userP)
 		// Union, never replace: an empty user list must not strip protections.
 		if l.v.IsSet("providers." + name + ".skip_prefixes") {
