@@ -253,13 +253,15 @@ func TestAuto_FreeSpaceReadFailureIsStillRecorded(t *testing.T) {
 }
 
 func TestRunHistory_ReadsStateDirUnderHome(t *testing.T) {
-	home := t.TempDir()
+	// Go builds t.TempDir from GOTMPDIR, which may not be a clean path, while
+	// the state directory is always joined (and so cleaned) from home.
+	home := filepath.Clean(t.TempDir())
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_STATE_HOME", filepath.Join(home, "xdg"))
 	stateDir, err := auto.StateDir()
 	require.NoError(t, err)
-	require.True(t, strings.HasPrefix(stateDir, home))
+	require.True(t, strings.HasPrefix(stateDir, home+string(filepath.Separator)))
 	require.NoError(t, auto.AppendRun(stateDir, auto.NewRunRecord(auto.Report{Tier: auto.TierLow}, time.Now(), nil, false)))
 
 	cmd := &cobra.Command{}

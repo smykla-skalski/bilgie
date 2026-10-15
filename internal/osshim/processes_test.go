@@ -1,11 +1,13 @@
 package osshim
 
 import (
+	"bufio"
 	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -21,29 +23,29 @@ func TestProcessCommandLinesSeesChild(t *testing.T) {
 
 	marker := "-osshim.marker=" + strconv.Itoa(os.Getpid())
 	cmd := exec.Command(exe, marker)
-	cmd.Env = append(os.Environ(), helperEnv+"=child", "OSSHIM_HEARTBEAT="+heartbeatPath(t))
+	cmd.Env = append(os.Environ(), helperEnv+"=child", readyEnv+"=1", "OSSHIM_HEARTBEAT="+heartbeatPath(t))
+	stdout, err := cmd.StdoutPipe()
+	require.NoError(t, err)
 	require.NoError(t, cmd.Start())
 	t.Cleanup(func() {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 	})
 
+	// A started child can still be mid-exec and show its parent's arguments, so
+	// listing waits until the child itself reports it is running.
+	line, err := bufio.NewReader(stdout).ReadString('\n')
+	require.NoError(t, err, "child exited before it was ready")
+	require.Equal(t, readyLine, strings.TrimSpace(line))
+
 	want := marker
 	if runtime.GOOS == "windows" {
 		want = strings.TrimSuffix(filepath.Base(exe), ".exe")
 	}
-	require.Eventually(t, func() bool {
-		lines, listErr := ProcessCommandLines(context.Background())
-		if listErr != nil {
-			return false
-		}
-		for _, l := range lines {
-			if strings.Contains(l, want) {
-				return true
-			}
-		}
-		return false
-	}, 10*time.Second, 100*time.Millisecond)
+	lines, err := ProcessCommandLines(context.Background())
+	require.NoError(t, err)
+	assert.True(t, slices.ContainsFunc(lines, func(l string) bool { return strings.Contains(l, want) }),
+		"a running child must appear in the listing")
 }
 
 func TestProcessCommandLinesHonoursCancelledContext(t *testing.T) {

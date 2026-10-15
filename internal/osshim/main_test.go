@@ -1,6 +1,7 @@
 package osshim
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,7 +10,10 @@ import (
 	"time"
 )
 
-const helperEnv = "OSSHIM_HELPER"
+const (
+	helperEnv = "OSSHIM_HELPER"
+	readyEnv  = "OSSHIM_READY"
+)
 
 // TestMain doubles as a child-process fixture: the test binary re-executes
 // itself as "parent" (spawns a "child") or "child" (heartbeats to a file).
@@ -33,8 +37,17 @@ func runParent() int {
 	return 0
 }
 
+// readyLine is what a child prints once it is running, for a parent that must
+// not look for it before it has finished starting.
+const readyLine = "ready"
+
 func runChild() int {
 	beat := os.Getenv("OSSHIM_HEARTBEAT")
+	if os.Getenv(readyEnv) != "" {
+		if _, err := fmt.Println(readyLine); err != nil {
+			return 1
+		}
+	}
 	for i := 0; ; i++ {
 		if err := os.WriteFile(beat, []byte(strconv.Itoa(i)), 0o600); err != nil {
 			return 1

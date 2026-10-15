@@ -218,18 +218,22 @@ func TestExcludeSelf_LinuxPaddedWrapper(t *testing.T) {
 }
 
 func TestProcessLister_OmitsOwnProcess(t *testing.T) {
-	lines, err := processLister([]string{"go"})(context.Background())
-	require.NoError(t, err)
-	all, err := osshim.ProcessTable(context.Background())
-	require.NoError(t, err)
-	var own string
-	for i := range all {
-		if all[i].PID == os.Getpid() {
-			own = all[i].CommandLine
-		}
+	var snapshot []osshim.Process
+	table := func(ctx context.Context) ([]osshim.Process, error) {
+		procs, err := osshim.ProcessTable(ctx)
+		snapshot = procs
+		return procs, err
 	}
-	require.NotEmpty(t, own)
-	assert.Less(t, len(lines), len(all))
+
+	kept, err := processTableListerFrom(table, []string{"go"})(context.Background())
+	require.NoError(t, err)
+
+	own := os.Getpid()
+	require.True(t, slices.ContainsFunc(snapshot, func(p osshim.Process) bool { return p.PID == own }),
+		"the live process table must list the test process")
+	assert.False(t, slices.ContainsFunc(kept, func(p osshim.Process) bool { return p.PID == own }),
+		"the lister must drop the test process")
+	assert.Less(t, len(kept), len(snapshot), "every dropped row comes from the one snapshot")
 }
 
 // procsOf turns bare command lines into process rows.
