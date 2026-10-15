@@ -2,17 +2,10 @@ package provider
 
 import (
 	"path/filepath"
-	"runtime"
 	"strings"
 )
 
-const (
-	archiveMarker = "/" + uvArchiveDir + "/"
-	envMarker     = "/" + uvEnvDirPrefix
-	maxRootStarts = 16
-	envEntryParts = 3
-	archiveParts  = 2
-)
+const maxCandidate = 1024
 
 // pathResolver resolves symlinks once per path for one evidence snapshot. A
 // path that does not resolve has no entry, so callers keep its raw spelling.
@@ -40,109 +33,76 @@ func (r *pathResolver) resolve(path string) (string, bool) {
 	return resolved, resolved != ""
 }
 
-// cacheRef is a cache entry a process names: the symlink-free cache root and
-// the entry below it ("archive-v0/<id>" or "environments-vN/<bucket>/<name>").
-// Both are normalized for comparison.
-type cacheRef struct {
-	root string
-	rest string
-}
-
-// cacheRefs finds every archive-v0/<id> and environments-v*/<bucket>/<name>
-// path in text and resolves the directory in front of it, whatever alias the
-// process spelled it with. The raw spellings are matched separately, so a
-// root that no longer resolves loses nothing.
-func (r *pathResolver) cacheRefs(text string) []cacheRef {
-	var refs []cacheRef
-	for _, marker := range []string{archiveMarker, envMarker} {
-		for from := 0; ; {
-			i := indexPathMarker(text, marker, from)
-			if i < 0 {
-				break
-			}
-			from = i + len(marker)
-			rest := entryAfter(text, i+1, marker == envMarker)
-			if rest == "" {
-				continue
-			}
-			for _, start := range rootStarts(text, i) {
-				root, ok := r.resolve(text[start:i])
-				if !ok {
-					continue
-				}
-				refs = append(refs, cacheRef{root: normalizeText(root), rest: normalizeText(rest)})
-			}
+// resolvedPaths returns every absolute path text names, resolved through all
+// symlinks and normalized for comparison. Any alias of a directory therefore
+// compares equal to the directory itself, and so does a symlink to it. The
+// raw spellings are matched separately, so a path that does not resolve
+// loses nothing.
+func (r *pathResolver) resolvedPaths(text string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for i := range len(text) {
+		if text[i] != '/' || !pathStart(text, i) {
+			continue
+		}
+		resolved, ok := r.resolveLongest(text[i:candidateEnd(text, i)])
+		if !ok {
+			continue
+		}
+		if key := normalizeText(resolved); !seen[key] {
+			seen[key] = true
+			out = append(out, key)
 		}
 	}
-	return refs
+	return out
 }
 
-// entryAfter reads the cache entry that begins at text[from]: archive-v0/<id>
-// or environments-v*/<bucket>/<name>. It returns "" when the entry is
-// incomplete.
-func entryAfter(text string, from int, env bool) string {
-	parts := archiveParts
-	if env {
-		parts = envEntryParts
-	}
-	end := from
-	for n := range parts {
-		if n > 0 {
-			if end >= len(text) || text[end] != '/' {
-				return ""
-			}
-			end++
+// resolveLongest resolves the longest leading part of candidate that exists
+// and keeps the rest as written: a path a process names may continue past
+// the file system (arguments after a space, a file not created yet).
+func (r *pathResolver) resolveLongest(candidate string) (string, bool) {
+	for end := len(candidate); end > 1; end-- {
+		if end < len(candidate) && candidate[end] != '/' && candidate[end] != ' ' {
+			continue
 		}
-		start := end
-		for end < len(text) && idByte(text[end]) {
-			end++
+		prefix := strings.TrimRight(candidate[:end], " ")
+		if len(prefix) < 2 {
+			continue
 		}
-		if end == start {
-			return ""
+		if resolved, ok := r.resolve(prefix); ok {
+			return resolved + candidate[len(prefix):], true
 		}
 	}
-	return text[from:end]
+	return "", false
 }
 
-// rootStarts returns the offsets before marker where an absolute path may
-// begin: a slash at the start of the text or after a delimiter. A path with
-// spaces starts after the delimiter in front of it, so every candidate is
-// tried and those that do not resolve are dropped.
-func rootStarts(text string, marker int) []int {
-	var starts []int
-	for j := marker - 1; j >= 0 && len(starts) < maxRootStarts; j-- {
-		if text[j] == '\n' || text[j] == 0 {
-			break
-		}
-		if text[j] == '/' && (j == 0 || pathDelimiter(text[j-1])) {
-			starts = append(starts, j)
-		}
-	}
-	return starts
-}
-
-func pathDelimiter(b byte) bool {
-	switch b {
-	case ' ', '\t', ':', '=', '"', '\'', '(', ';', ',', '[', '<', '>':
+// pathStart reports whether the slash at text[i] begins a path rather than
+// continues one: it follows a delimiter, or a short flag such as -I or -L.
+func pathStart(text string, i int) bool {
+	if i == 0 {
 		return true
 	}
-	return false
+	prev := text[i-1]
+	switch {
+	case prev >= 'a' && prev <= 'z' || prev >= 'A' && prev <= 'Z':
+		return i >= 2 && text[i-2] == '-' && (i == 2 || !idByte(text[i-3]))
+	case idByte(prev) || prev == '.' || prev == '+' || prev == '%' || prev == '/':
+		return false
+	}
+	return true
 }
 
-// indexPathMarker finds marker in text from an offset, ignoring case where
-// the file system does. The markers are ASCII, so offsets stay valid.
-func indexPathMarker(text, marker string, from int) int {
-	if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
-		i := strings.Index(text[from:], marker)
-		if i < 0 {
-			return -1
+// candidateEnd is where the path that starts at text[from] stops: at a
+// delimiter that cannot be part of a path, or at the length cap. Spaces stay
+// in, because a path may contain them.
+func candidateEnd(text string, from int) int {
+	end := from + 1
+	for end < len(text) && end-from < maxCandidate {
+		switch text[end] {
+		case '\n', 0, ':', ';', ',', '"', '\'', '=', '(', ')', '<', '>', '|', '`', '$', '&', '[', ']', '{', '}':
+			return end
 		}
-		return from + i
+		end++
 	}
-	for i := from; i+len(marker) <= len(text); i++ {
-		if text[i] == '/' && strings.EqualFold(text[i:i+len(marker)], marker) {
-			return i
-		}
-	}
-	return -1
+	return end
 }

@@ -127,37 +127,91 @@ func TestUVProvider_SweepLeavesLinksThatLeaveTheArchiveAlone(t *testing.T) {
 	assert.DirExists(t, f.envs[envB])
 }
 
-func TestCacheRefsResolveEveryAliasInFrontOfAnEntry(t *testing.T) {
+func TestUVProvider_SweepKeepsAnEnvironmentReachedThroughASymlinkToIt(t *testing.T) {
+	f := newSweepFixture(t)
+	venv := filepath.Join(t.TempDir(), "myvenv")
+	require.NoError(t, os.Symlink(f.envs[envA], venv))
+	f.setProcs(f.aged, proc(501, 500, 3*time.Hour, filepath.Join(f.envs[envB], "bin", "python")+" "+filepath.Join(venv, "bin", "server")))
+
+	res, err := f.p.Clean(context.Background(), CleanOptions{Mode: CleanModeSmart})
+	require.NoError(t, err)
+	assert.Contains(t, res.SkipReason, "all 2 cached environments are in use")
+	f.requireIntact(t, envA, envB)
+}
+
+func TestUVProvider_SweepKeepsAnEnvironmentNamedBehindAFlag(t *testing.T) {
+	flags := map[string]string{"include": "-I", "library": "-L", "prefix": "--prefix=", "at": "@", "subshell": "$(", "pipe": "|"}
+	for name, flag := range flags {
+		t.Run(name, func(t *testing.T) {
+			f := newSweepFixture(t)
+			alias := f.aliasOf(t)
+			f.setProcs(f.aged, f.serverFor(envA), proc(900, 1, time.Minute, "cc "+flag+filepath.Join(alias, "archive-v0", envB, "include")+" x.c"))
+
+			res, err := f.p.Clean(context.Background(), CleanOptions{Mode: CleanModeSmart})
+			require.NoError(t, err)
+			assert.NotEmpty(t, res.SkipReason)
+			f.requireIntact(t, envA, envB)
+		})
+	}
+}
+
+func TestUVProvider_SweepKeepsAnEnvironmentNamedThroughASymlinkedArchive(t *testing.T) {
+	f := newSweepFixture(t)
+	big := filepath.Join(t.TempDir(), "archive-v0")
+	require.NoError(t, os.Rename(filepath.Join(f.dir, "archive-v0"), big))
+	require.NoError(t, os.Symlink(big, filepath.Join(f.dir, "archive-v0")))
+	f.setProcs(f.aged, f.serverFor(envA), proc(900, 1, time.Minute, filepath.Join(big, envB, "bin", "python")+" job.py"))
+
+	res, err := f.p.Clean(context.Background(), CleanOptions{Mode: CleanModeSmart})
+	require.NoError(t, err)
+	assert.NotEmpty(t, res.SkipReason)
+	f.requireIntact(t, envA, envB)
+}
+
+func TestUVProvider_SweepKeepsAnEnvironmentWhoseLinkWasRemovedMidSweep(t *testing.T) {
+	f := newSweepFixture(t)
+	alias := f.aliasOf(t)
+	f.setProcs(f.aged, f.serverFor(envA))
+	calls := 0
+	f.p.busy.listProcesses = func(context.Context) ([]osshim.Process, error) {
+		calls++
+		if calls > 2 {
+			return []osshim.Process{f.aged, f.serverFor(envA), proc(900, 1, time.Minute, "env PATH="+filepath.Join(alias, "environments-v2", "bucket1", "hash"+envB[:2], "bin"))}, nil
+		}
+		return []osshim.Process{f.aged, f.serverFor(envA)}, nil
+	}
+
+	_, err := f.p.Clean(context.Background(), CleanOptions{Mode: CleanModeSmart})
+	require.NoError(t, err)
+	f.requireIntact(t, envA, envB)
+}
+
+func TestResolvedPathsFollowEveryAlias(t *testing.T) {
 	target := t.TempDir()
-	resolvedReal, err := filepath.EvalSymlinks(target)
+	resolvedTarget, err := filepath.EvalSymlinks(target)
 	require.NoError(t, err)
 	spaced := filepath.Join(t.TempDir(), "My Cache")
-	require.NoError(t, os.Symlink(resolvedReal, spaced))
+	require.NoError(t, os.Symlink(resolvedTarget, spaced))
 	plain := filepath.Join(t.TempDir(), "plain")
-	require.NoError(t, os.Symlink(resolvedReal, plain))
-	missing := filepath.Join(t.TempDir(), "missing")
+	require.NoError(t, os.Symlink(resolvedTarget, plain))
+	want := normalizeText(resolvedTarget)
 
 	tests := []struct {
 		name string
 		text string
-		want []cacheRef
+		want string
 	}{
-		{"path with spaces", "PATH=" + spaced + "/archive-v0/ID1/bin:/usr/bin", []cacheRef{{normalizeText(resolvedReal), "archive-v0/id1"}}},
-		{"command line", plain + "/archive-v0/ID2/bin/python script.py", []cacheRef{{normalizeText(resolvedReal), "archive-v0/id2"}}},
-		{"environment link", "x " + plain + "/environments-v2/ab/cd/bin", []cacheRef{{normalizeText(resolvedReal), "environments-v2/ab/cd"}}},
-		{"incomplete link", plain + "/environments-v2/ab", nil},
-		{"missing directory", missing + "/archive-v0/ID3/bin", nil},
-		{"no entry", plain + "/archive-v0/", nil},
+		{"path with spaces", "PATH=" + spaced + "/bin:/usr/bin", want + "/bin"},
+		{"command line", plain + "/x/python script.py", want + "/x/python script.py"},
+		{"glued flag", "cc -I" + plain + "/inc x.c", want + "/inc x.c"},
+		{"file not created yet", plain + "/new.log", want + "/new.log"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := newPathResolver().cacheRefs(tt.text)
-			for _, want := range tt.want {
-				assert.Contains(t, got, cacheRef{root: want.root, rest: normalizeText(want.rest)})
-			}
-			if tt.want == nil {
-				assert.Empty(t, got)
-			}
+			assert.Contains(t, newPathResolver().resolvedPaths(tt.text), normalizeText(tt.want))
 		})
 	}
+	t.Run("missing directory", func(t *testing.T) {
+		assert.NotContains(t, newPathResolver().resolvedPaths(filepath.Join(t.TempDir(), "gone", "x")), want)
+	})
 }
