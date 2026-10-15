@@ -19,15 +19,23 @@ import (
 // `--force` removes the environments they run from.
 type uvxVerdict struct {
 	busy string
+	// aged are the uvx servers that hold this cache's lock.
 	aged []osshim.Process
+	// others are uvx servers old enough to ignore that do not hold the lock.
+	// They use another cache unless a process below them runs from this one.
+	others []osshim.Process
+	// seen is every uv process the check listed, by pid.
+	seen map[int]bool
 }
 
 // classifyUV runs the uv busy check. A uv process that is not a uvx server
 // older than minAge, a held lock nobody explains and any failed check still
 // block, as they always did. A uvx server older than minAge no longer blocks
 // the provider when it holds this cache's lock: it is reported in aged so the
-// caller can sweep around it. One that does not hold the lock uses another
-// cache and is ignored, since uv keeps its cache lock for as long as it runs.
+// caller can sweep around it. One that does not hold the lock is reported in
+// others: uv keeps its cache lock for as long as it runs, so it normally uses
+// another cache, but the caller still checks that nothing below it runs from
+// this one.
 func (g *busyGuard) classifyUV(ctx context.Context, minAge time.Duration) uvxVerdict {
 	if g == nil {
 		return uvxVerdict{}
@@ -51,11 +59,13 @@ func (g *busyGuard) classifyUV(ctx context.Context, minAge time.Duration) uvxVer
 		now = g.now()
 	}
 	var servers []osshim.Process
+	seen := map[int]bool{}
 	for i := range procs {
 		tool := matchProcess(procs[i].CommandLine, g.processes)
 		if tool == "" {
 			continue
 		}
+		seen[procs[i].PID] = true
 		if uvxAgedOut(&procs[i], now, minAge) {
 			servers = append(servers, procs[i])
 			continue
@@ -66,7 +76,7 @@ func (g *busyGuard) classifyUV(ctx context.Context, minAge time.Duration) uvxVer
 		return uvxVerdict{busy: describeBusy(tool, &procs[i], now)}
 	}
 	if heldPath == "" {
-		return uvxVerdict{}
+		return uvxVerdict{others: servers, seen: seen}
 	}
 	if len(servers) == 0 {
 		return uvxVerdict{busy: "lock held: " + heldPath}
@@ -76,7 +86,9 @@ func (g *busyGuard) classifyUV(ctx context.Context, minAge time.Duration) uvxVer
 		return uvxVerdict{busy: fmt.Sprintf("lock held: %s; cannot tell who holds it: %v", heldPath, err)}
 	}
 	var aged []osshim.Process
+	held := map[int]bool{}
 	for _, pid := range holders {
+		held[pid] = true
 		i := slices.IndexFunc(servers, func(p osshim.Process) bool { return p.PID == pid })
 		if i < 0 {
 			return uvxVerdict{busy: "lock held: " + heldPath}
@@ -86,7 +98,13 @@ func (g *busyGuard) classifyUV(ctx context.Context, minAge time.Duration) uvxVer
 	if len(aged) == 0 {
 		return uvxVerdict{busy: "lock held: " + heldPath}
 	}
-	return uvxVerdict{aged: aged}
+	var others []osshim.Process
+	for i := range servers {
+		if !held[servers[i].PID] {
+			others = append(others, servers[i])
+		}
+	}
+	return uvxVerdict{aged: aged, others: others, seen: seen}
 }
 
 // uvxAgedOut reports whether p is a uvx server that has run for minAge and

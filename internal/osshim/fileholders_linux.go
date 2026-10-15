@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"syscall"
 )
 
 // FileHolders returns the pids of the processes that have path open, read
@@ -37,15 +36,16 @@ func holdersFromProc(ctx context.Context, root, path string, selfUID int) ([]int
 			return nil, err
 		}
 		base := filepath.Join(root, pid)
-		fds, err := os.ReadDir(filepath.Join(base, "fd"))
-		switch {
-		case err == nil:
-		case errors.Is(err, os.ErrNotExist), errors.Is(err, syscall.ESRCH):
-			continue
-		case errors.Is(err, os.ErrPermission) && !ownedBy(base, selfUID):
-			continue
-		default:
+		var fds []os.DirEntry
+		skip, err := readProc(base, selfUID, func() (readErr error) {
+			fds, readErr = os.ReadDir(filepath.Join(base, "fd"))
+			return readErr
+		})
+		if err != nil {
 			return nil, fmt.Errorf("inspect process %s: %w", pid, err)
+		}
+		if skip {
+			continue
 		}
 		for _, fd := range fds {
 			link, err := os.Readlink(filepath.Join(base, "fd", fd.Name()))

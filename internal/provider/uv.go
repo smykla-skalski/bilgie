@@ -164,8 +164,18 @@ func (p *UVProvider) Clean(ctx context.Context, opts CleanOptions) (CleanResult,
 	if verdict.busy != "" && ctx.Err() == nil {
 		return skipResult(verdict.busy), nil
 	}
-	if len(verdict.aged) > 0 && ctx.Err() == nil {
-		return p.sweepEnvironments(ctx, opts, verdict.aged)
+	if ctx.Err() == nil {
+		aged := verdict.aged
+		if len(verdict.others) > 0 {
+			users, err := p.cacheUsers(ctx, verdict.others)
+			if err != nil {
+				return skipResult(fmt.Sprintf("cannot tell whether %s uses this cache: %v", describeAged(verdict.others, time.Now()), err)), nil
+			}
+			aged = append(slices.Clone(aged), users...)
+		}
+		if len(aged) > 0 {
+			return p.sweepEnvironments(ctx, opts, aged, verdict.seen)
+		}
 	}
 	bin, found := p.findUV()
 	if !found {

@@ -536,3 +536,65 @@ func TestUVProvider_AgedUvxWithoutTheLockLeavesUvFree(t *testing.T) {
 	assert.Empty(t, res.SkipReason)
 	assert.Len(t, logLines(t, f.log), 1, "no uvx server uses this cache, so uv runs")
 }
+
+func TestUVProvider_AgedUvxUsingTheCacheWithoutTheLockIsSweptNotCleaned(t *testing.T) {
+	f := newSweepFixture(t)
+	f.p.busy.lockHeld = func(string) (bool, error) { return false, nil }
+	f.setProcs(f.aged, f.serverFor(envA))
+
+	res, err := f.p.Clean(context.Background(), CleanOptions{Mode: CleanModeFull})
+	require.NoError(t, err)
+	assert.Empty(t, res.SkipReason)
+	f.requireIntact(t, envA)
+	f.requireGone(t, envB)
+	assert.Empty(t, logLines(t, f.log), "uv cache clean would remove the environment the server runs from")
+}
+
+func TestUVProvider_AgedUvxWithoutTheLockFailsClosedWhenEvidenceIsMissing(t *testing.T) {
+	f := newSweepFixture(t)
+	f.p.busy.lockHeld = func(string) (bool, error) { return false, nil }
+	f.setProcs(f.aged, f.serverFor(envA))
+	f.p.processEnvs = func(context.Context) ([]osshim.ProcessEnv, error) { return nil, errors.New("boom") }
+
+	res, err := f.p.Clean(context.Background(), CleanOptions{Mode: CleanModeFull})
+	require.NoError(t, err)
+	assert.Contains(t, res.SkipReason, "cannot tell whether")
+	f.requireIntact(t, envA, envB)
+	assert.Empty(t, logLines(t, f.log))
+}
+
+func TestUVProvider_SweepKeepsEveryLinkOfASharedPayload(t *testing.T) {
+	f := newSweepFixture(t)
+	second := filepath.Join(f.dir, "environments-v2", "bucket2")
+	require.NoError(t, os.MkdirAll(second, 0o700))
+	require.NoError(t, os.Symlink(filepath.Join("..", "..", "archive-v0", envA), filepath.Join(second, "hashZZ")))
+	envs, err := f.p.cachedEnvironments()
+	require.NoError(t, err)
+	require.Len(t, envs, 3)
+
+	// A process names one link of envA; the other link and the payload must stay too.
+	ev := uvxEvidence{procs: []osshim.Process{{PID: 1, CommandLine: filepath.Join(f.links[envA], "bin", "python")}}}
+	ev.texts = []string{normalizeText(ev.procs[0].CommandLine)}
+	unused, used := f.p.split(envs, ev)
+	require.Len(t, unused, 1)
+	assert.Equal(t, f.envs[envB], unused[0].payload)
+	assert.Len(t, used, 2)
+}
+
+func TestUVProvider_SweepSkipsWhenUVStartedBeforeTheFirstSnapshot(t *testing.T) {
+	f := newSweepFixture(t)
+	calls := 0
+	f.p.busy.listProcesses = func(context.Context) ([]osshim.Process, error) {
+		calls++
+		procs := []osshim.Process{f.aged, f.serverFor(envA)}
+		if calls > 1 {
+			procs = append(procs, proc(900, 1, time.Second, "/opt/uv/uv tool uvx other"))
+		}
+		return procs, nil
+	}
+
+	res, err := f.p.Clean(context.Background(), CleanOptions{Mode: CleanModeSmart})
+	require.NoError(t, err)
+	assert.Contains(t, res.SkipReason, "uv started (pid 900) while checking")
+	f.requireIntact(t, envA, envB)
+}
