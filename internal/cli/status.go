@@ -45,10 +45,35 @@ type DatabaseStatus struct {
 	InUse       bool   `json:"in_use"`
 }
 
+// AgentMode says whether the next real pass previews or deletes.
+type AgentMode struct {
+	// Mode is "preview" while the first-run marker is armed, else "acting".
+	Mode   string `json:"mode"`
+	Detail string `json:"detail"`
+	Armed  bool   `json:"armed"`
+}
+
+// agentModeOf reads the first-run marker in stateDir.
+func agentModeOf(stateDir string) *AgentMode {
+	if auto.FirstRunPending(stateDir) {
+		return &AgentMode{Armed: true, Mode: "preview", Detail: auto.ArmedDetail}
+	}
+	return &AgentMode{Mode: "acting", Detail: auto.DisarmedDetail}
+}
+
+func (m AgentMode) line() string {
+	hint := "bilgie disarm"
+	if !m.Armed {
+		hint = "bilgie arm"
+	}
+	return fmt.Sprintf("Agent mode: %s, %s (run: %s to flip it)", m.Mode, m.Detail, hint)
+}
+
 // StatusOutput holds full status output for JSON serialization.
 type StatusOutput struct {
 	Total      string                `json:"total"`
 	Providers  []ProviderStatus      `json:"providers"`
+	AgentMode  *AgentMode            `json:"agent_mode,omitempty"`
 	Unmanaged  *auto.UnmanagedReport `json:"unmanaged,omitempty"`
 	Protected  *auto.ProtectedReport `json:"protected,omitempty"`
 	TotalBytes int64                 `json:"total_bytes"`
@@ -83,7 +108,11 @@ func runStatus(cmd *cobra.Command, _ []string) error {
 	if top > 0 {
 		scan = defaultUnmanagedScan(top)
 	}
-	return runStatusWithLoader(config.NewLoader(), jsonFlag, scan, defaultProtectedScan)
+	stateDir, err := auto.StateDir()
+	if err != nil {
+		return err
+	}
+	return runStatusInDir(config.NewLoader(), jsonFlag, scan, defaultProtectedScan, stateDir)
 }
 
 func defaultProtectedScan(ctx context.Context, cfg *config.Config) auto.ProtectedReport {
@@ -104,15 +133,34 @@ func defaultUnmanagedScan(top int) unmanagedScan {
 	}
 }
 
+// runStatusWithLoader reports providers only; it leaves out the agent mode,
+// which needs a state directory.
 func runStatusWithLoader(loader *config.Loader, jsonOutput bool, scan unmanagedScan, protect protectedScan) error {
+	return runStatusInDir(loader, jsonOutput, scan, protect, "")
+}
+
+// runStatusInDir also reports the agent mode read from stateDir; an empty
+// stateDir skips it.
+func runStatusInDir(loader *config.Loader, jsonOutput bool, scan unmanagedScan, protect protectedScan, stateDir string) error {
 	cfg, err := loader.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 
+	var mode *AgentMode
+	if stateDir != "" {
+		mode = agentModeOf(stateDir)
+	}
+
 	providers := cfg.EnabledProviders()
 	if len(providers) == 0 {
+		if jsonOutput && mode != nil {
+			return outputJSONWithMode(nil, nil, nil, mode)
+		}
 		fmt.Println("No enabled providers")
+		if mode != nil && !jsonOutput {
+			fmt.Println(dimStyle.Render(mode.line()))
+		}
 		if protect != nil && !jsonOutput {
 			outputProtected(protect(context.Background(), cfg))
 		}
@@ -141,10 +189,13 @@ func runStatusWithLoader(loader *config.Loader, jsonOutput bool, scan unmanagedS
 	wg.Wait()
 
 	if jsonOutput {
-		return outputJSON(statuses, unmanaged, protected)
+		return outputJSONWithMode(statuses, unmanaged, protected, mode)
 	}
 	if err := outputTable(statuses); err != nil {
 		return err
+	}
+	if mode != nil {
+		fmt.Println(dimStyle.Render(mode.line()))
 	}
 	if unmanaged != nil {
 		outputUnmanaged(*unmanaged)
@@ -220,15 +271,23 @@ func scanProvider(ctx context.Context, cfg *config.Config, name string) Provider
 }
 
 func outputJSON(statuses []ProviderStatus, unmanaged *auto.UnmanagedReport, protected *auto.ProtectedReport) error {
+	return outputJSONWithMode(statuses, unmanaged, protected, nil)
+}
+
+func outputJSONWithMode(statuses []ProviderStatus, unmanaged *auto.UnmanagedReport, protected *auto.ProtectedReport, mode *AgentMode) error {
 	var total int64
 	for i := range statuses {
 		total += statuses[i].Current
+	}
+	if statuses == nil {
+		statuses = []ProviderStatus{}
 	}
 
 	out := StatusOutput{
 		Providers:  statuses,
 		TotalBytes: total,
 		Total:      size.FormatSize(total),
+		AgentMode:  mode,
 		Unmanaged:  unmanaged,
 		Protected:  protected,
 	}

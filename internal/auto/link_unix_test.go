@@ -180,3 +180,29 @@ func TestInstall_FollowsALinkedParentOfTheLogDir(t *testing.T) {
 	assert.DirExists(t, filepath.Join(elsewhere, agentName))
 	assert.Empty(t, a.LinkedPaths())
 }
+
+func TestArm_RefusesToWriteThroughALink(t *testing.T) {
+	dir := t.TempDir()
+	link, victim := linkTo(t, dir, firstRunMarker)
+
+	_, err := Arm(dir)
+
+	require.ErrorIs(t, err, fsx.ErrSymlink)
+	requireUntouched(t, victim)
+	assert.True(t, FirstRunPending(dir))
+	assert.FileExists(t, link)
+}
+
+func TestDisarm_LeavesALinkedMarkerForTheUser(t *testing.T) {
+	dir := t.TempDir()
+	link, victim := linkTo(t, dir, firstRunMarker)
+
+	changed, err := Disarm(dir)
+
+	require.ErrorContains(t, err, "symbolic link")
+	assert.False(t, changed)
+	requireUntouched(t, victim)
+	_, statErr := os.Lstat(link)
+	require.NoError(t, statErr, "the link stays")
+	assert.True(t, FirstRunPending(dir), "a linked marker keeps deletion off")
+}

@@ -9,8 +9,8 @@ cmd/bilgie/     - CLI entrypoint
 internal/
   appname/            - Single source of the project name (Name) and its pre-rename value (Legacy)
   cache/              - Cache size scanning
-  auto/               - Free-space tiers, tick decision (cooldowns, hysteresis, forecast), auto run, per-OS scheduler (launchd, systemd/cron, schtasks), notifiers, first-run marker
-  cli/                - Cobra command implementations (status, clean, config, tick, auto, history, doctor, discover, install-agent)
+  auto/               - Free-space tiers, tick decision (cooldowns, hysteresis, forecast), auto run, per-OS scheduler (launchd, systemd/cron, schtasks), notifiers, first-run marker (Arm and Disarm flip it under the run lock)
+  cli/                - Cobra command implementations (status, clean, config, tick, auto, history, doctor, discover, install-agent, arm, disarm)
   discover/           - Read-only suggestions of the providers a machine needs: tiers (regenerable, opt-in, protected), unmanaged-directory entries
   report/             - Concise per-provider summaries (text and JSON summary objects) for clean and auto
   doctor/             - Pure health checks behind `bilgie doctor` (agent, last run, free-space trend, swap and memory, config, notifier)
@@ -158,6 +158,16 @@ bilgie clean --dry-run     # preview only
 bilgie clean --force       # skip confirmation
 bilgie clean --quiet       # minimal output
 ```
+
+### Arm and Disarm
+
+```bash
+bilgie arm     # write the first-run marker: the next real pass only previews
+bilgie disarm  # clear it: the next real pass deletes
+```
+
+`install-agent` arms it again. Both commands take the run lock first and fail while a pass runs;
+`doctor` and `status` (`agent_mode` in `--json`) show the mode. Never auto-disarm.
 
 ## Quality Gates
 

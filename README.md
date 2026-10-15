@@ -287,6 +287,11 @@ an enabled provider, or a `dir-pattern` sweep, points at it, into it or at a par
 scan measures top-level totals only, runs for at most 10 seconds and stops on Ctrl-C; when it
 stops early the sizes are lower bounds and `status` says so. `--json` adds an `unmanaged` object.
 
+Under the provider table, `status` prints the agent mode: `preview` while the first-run marker is
+armed (the next real pass only previews and deletes nothing) and `acting` once it is disarmed (the
+next real pass deletes). `--json` adds an `agent_mode` object. `bilgie arm` and `bilgie disarm`
+switch it; `install-agent` arms it again.
+
 `status` then lists protected data that exists, with sizes, under "Needs a human (protected, never
 auto-deleted)": the `protected` list, `worktrees` directories and git checkouts (any directory holding a `.git` entry) up to four levels below home (hidden directories, `node_modules`, Library, Documents, Desktop, Pictures, Movies and Music are not searched; a checkout is listed once, not searched further), the Docker Desktop VM data that holds Docker volumes (`~/Library/Containers/com.docker.docker/Data/vms` on macOS, `~/.docker/desktop/vms` on Linux), and the other paths auto always skips, such as Xcode archives. Sizes are
 measured with the same kind of bounded scan (10 second budget, Ctrl-C stops it, partial sizes are marked
@@ -387,6 +392,8 @@ bilgie auto --dry-run   # Preview only
 bilgie auto --verbose   # List every entry
 bilgie install-agent    # Run tick every auto.tick_interval with the OS scheduler
 bilgie uninstall-agent  # Unload and remove everything install-agent created
+bilgie disarm           # Let the next real pass delete instead of previewing
+bilgie arm              # Make the next real pass only preview again
 ```
 
 The scheduled agent runs `bilgie tick` every `auto.tick_interval` (default 2m). A tick reads free
@@ -462,6 +469,7 @@ Safety rules:
 - The first run after `install-agent` is a dry-run that deletes nothing, and a tick never runs a real pass while it is pending. A marker in
   `~/.local/state/bilgie/` records it, so it survives restarts and only a completed
   dry-run below the low threshold, where at least one provider ran, clears it, and only when no provider failed. Running `install-agent` again arms it again.
+- `bilgie disarm` clears the marker by hand, so the next real pass deletes without waiting for a low-space preview; `bilgie arm` writes it back, so the next real pass only previews. Both take the run lock first, fail while a pass is running, and refuse a marker that is a symbolic link (`disarm` leaves the link for you to delete). `bilgie doctor` and `bilgie status` show the mode ("preview" while armed, "acting" once disarmed); `status --json` carries it as an `agent_mode` object with `armed`, `mode` and `detail`. Nothing disarms the agent on its own.
 
 `install-agent` picks the scheduler of the running OS. Install from a built or installed
 binary, not `go run`; the job records the binary path, so run `install-agent` again after
@@ -531,7 +539,7 @@ Checks, without changing anything, that the agent works: it is installed and loa
 scheduler of this OS (`launchctl print`, `systemctl --user is-active` or the crontab, `schtasks`),
 the cadence (tick and full-pass intervals), the last tick (it must be recent for `auto.tick_interval`; a missing tick
 means the installed agent is still the old 30-minute `auto` one) and the next expected full pass, the last run (time, tier, bytes freed, errors from `runs.jsonl`) is recent for `auto.interval`,
-free space is above the floors, the 7-day free-space trend from the run history, config problems
+the first-run mode (whether the next real pass deletes or only previews; a note while armed), free space is above the floors, the 7-day free-space trend from the run history, config problems
 (disabled providers, providers skipped on each of the last runs for a reason other than
 "within limit", providers on protected paths, providers whose config does not load), swap and memory, and whether the notifier program exists, plus a note when `bilgie discover` has providers to suggest.
 It exits non-zero when a finding needs attention; each one carries a "what to do" line.
@@ -547,6 +555,7 @@ $ bilgie doctor
 [FAIL] schedule: last run was 9h ago but the interval is 30m0s: the agent is not running
        what to do: see /Users/me/Library/Logs/bilgie/auto.log; run: bilgie install-agent to reinstall it
 [ok  ] freed: 38 GiB freed by 21 deleting run(s) in the last 7 days
+[ok  ] first run: the next real pass deletes (run: bilgie arm to preview first)
 [warn] free space: 24 GiB free of 460 GiB (5%), tier low
        what to do: run: bilgie auto; run: bilgie status for large unmanaged directories
 [warn] trend: free space -41 GiB over 6d (65 GiB -> 24 GiB, 80 run(s)); min_free is reached in about 8 day(s) at this rate
