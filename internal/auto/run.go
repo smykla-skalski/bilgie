@@ -252,9 +252,9 @@ func dryRunSuffix(dryRun bool) string {
 // candidates lists the providers for a tier. At the ok and low tiers the
 // cheapest to rebuild go first. At the critical and emergency tiers the
 // providers expected to free the most go first, rebuild cost breaking ties,
-// and the stale-directory sweeps that apply to the tier (sail-dirs from the
-// critical tier, the rest at the emergency tier) lead because they free the
-// most. docker-volumes is never listed.
+// and the stale-directory sweeps that apply to the tier (sail-dirs and
+// sail-e2e-dirs from the critical tier, the rest at the emergency tier) lead
+// because they free the most. docker-volumes is never listed.
 func candidates(cfg *config.Config, tier Tier) []candidate {
 	var sweeps, regular []string
 	byName := make(map[string]candidate)

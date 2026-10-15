@@ -174,6 +174,18 @@ func TestDiagnose_Findings(t *testing.T) {
 	}
 }
 
+func TestDiagnose_DefaultSweepsOnMacOS(t *testing.T) {
+	in := healthy()
+	in.GOOS = "darwin"
+	in.Cfg = config.DefaultConfigFor(config.Platform{OS: config.OSDarwin, Home: "/Users/u", TempDir: "/private/tmp"})
+
+	f := find(t, Diagnose(in), "sweeps")
+
+	assert.Equal(t, Note, f.Level)
+	assert.Contains(t, f.Message, "agent-scratch-dirs (emergency)")
+	assert.Contains(t, f.Message, "sail-dirs (critical), sail-e2e-dirs (critical)")
+}
+
 func TestDiagnose_AlwaysSkippedProvider(t *testing.T) {
 	skip := func(reason string) []auto.ProviderRecord {
 		return []auto.ProviderRecord{

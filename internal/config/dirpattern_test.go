@@ -49,6 +49,7 @@ func TestLoader_DefaultSailProviderStaysDisabled(t *testing.T) {
 
 func TestDefaultSailProviderSweepsFromCritical(t *testing.T) {
 	defaults := DefaultProvidersFor(Platform{OS: OSLinux, TempDir: "/tmp", SystemTempDir: "/tmp"})
+	require.NotContains(t, defaults, "sail-e2e-dirs", "the e2e cache directories exist on macOS only")
 
 	sail := defaults["sail-dirs"]
 	assert.False(t, sail.Enabled, "off in status and clean until the user opts in")
@@ -62,6 +63,54 @@ func TestDefaultSailProviderSweepsFromCritical(t *testing.T) {
 		if name != "sail-dirs" {
 			assert.False(t, pc.SweepsAtCritical(), "%s stays an emergency-tier sweep", name)
 		}
+	}
+}
+
+func TestDefaultSailE2EProviderSweepsFromCritical(t *testing.T) {
+	defaults := DefaultProvidersFor(macPlatform)
+
+	e2e := defaults["sail-e2e-dirs"]
+	assert.False(t, e2e.Enabled, "off in status and clean until the user opts in")
+	assert.True(t, e2e.SweepsAtCritical())
+	assert.Equal(t, SweepTierCritical, e2e.SweepTier)
+	assert.Equal(t, "2h", e2e.MinIdle)
+	assert.Nil(t, e2e.SkipIfOpen, "unset guard keeps its safe default (on)")
+	assert.Nil(t, e2e.SkipIfGitWorktree, "unset guard keeps its safe default (on)")
+	assert.False(t, e2e.OwnerMarker)
+
+	var critical []string
+	for name, pc := range defaults {
+		if pc.SweepsAtCritical() {
+			critical = append(critical, name)
+		}
+	}
+	assert.ElementsMatch(t, []string{"sail-dirs", "sail-e2e-dirs"}, critical,
+		"every other opt-in provider stays out of the critical tier")
+}
+
+func TestLoader_SweepTierSailE2E(t *testing.T) {
+	tests := []struct {
+		name     string
+		yaml     string
+		critical bool
+	}{
+		{"default is kept", "providers:\n  sail-e2e-dirs:\n    min_idle: 6h\n", true},
+		{"user can move it to emergency", "providers:\n  sail-e2e-dirs:\n    sweep_tier: emergency\n", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "config.yaml")
+			require.NoError(t, os.WriteFile(configPath, []byte("version: \"1\"\n"+tt.yaml), 0o600))
+			loader := NewLoader()
+			loader.SetConfigPath(configPath)
+			loader.SetPlatform(macPlatform)
+
+			cfg, err := loader.Load()
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.critical, cfg.Providers["sail-e2e-dirs"].SweepsAtCritical())
+			assert.False(t, cfg.Providers["sail-e2e-dirs"].Enabled)
+		})
 	}
 }
 

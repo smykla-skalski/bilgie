@@ -277,6 +277,21 @@ func TestRun_CriticalSweepsOnlyProvidersThatAskForIt(t *testing.T) {
 	assert.Equal(t, []string{"sail-dirs", "npm"}, h.calls, "the emergency-only sweep waits for the emergency tier")
 }
 
+func TestRun_CriticalSweepsEveryProviderOnTheCriticalTier(t *testing.T) {
+	h := newHarness(t)
+	h.add("npm", true, false)
+	h.add("sail-dirs", false, false, sweepAtCritical)
+	h.add("sail-e2e-dirs", false, false, sweepAtCritical)
+
+	report, err := h.run(false, 7*gib)
+
+	require.NoError(t, err)
+	assert.Equal(t, TierCritical, report.Tier)
+	require.Len(t, h.calls, 3)
+	assert.ElementsMatch(t, []string{"sail-dirs", "sail-e2e-dirs"}, h.calls[:2], "both critical sweeps lead the pass")
+	assert.Equal(t, "npm", h.calls[2])
+}
+
 func TestRun_EmergencySweepsEveryDisabledDirPattern(t *testing.T) {
 	h := newHarness(t)
 	h.add("sail-dirs", false, false, sweepAtCritical)

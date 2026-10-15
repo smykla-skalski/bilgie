@@ -32,7 +32,8 @@ var AutoCmd = &cobra.Command{
   low        below max(min_free, min(min_free_pct of the volume, min_free_cap)): smart-trim every
              enabled provider, cheapest to rebuild first, stopping once free space recovers
   critical   below critical_free (default 10G): the same trim, scheduled at the short cooldown,
-             with the sail-dirs sweep first (sweep_tier: critical, even when disabled)
+             with the sail-dirs and sail-e2e-dirs sweeps first (sweep_tier: critical,
+             even when disabled)
   emergency  below emergency_free (default 5G): also sweep every other stale directory
              (dir-pattern providers, even when disabled)
 
