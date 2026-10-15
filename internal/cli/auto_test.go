@@ -155,6 +155,28 @@ func TestAuto_FirstRunWithOneFailingProviderKeepsMarkerAndExitsNonZero(t *testin
 	assert.True(t, auto.FirstRunPending(f.env.stateDir), "a run with a provider error must not consume the marker")
 }
 
+func TestAuto_FirstRunClearFailureStampsThePassAndKeepsMarkerArmed(t *testing.T) {
+	f := newAutoFixture(t, 1*autoGiB, "")
+	marker := filepath.Join(f.env.stateDir, "first-run-pending")
+	require.NoError(t, os.MkdirAll(marker, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(marker, "keep"), []byte("x"), 0o600))
+
+	err := runAutoWithLoader(t.Context(), f.loader, f.env, false)
+
+	require.ErrorContains(t, err, "remove first-run marker")
+	assert.False(t, f.cleaned(), "first run is a dry-run")
+	assert.True(t, auto.FirstRunPending(f.env.stateDir), "an uncleared marker keeps the gate armed")
+	pass, readErr := auto.ReadPassState(f.env.stateDir)
+	require.NoError(t, readErr)
+	assert.False(t, pass.Time.IsZero(), "the pass is stamped so the tick does not repeat it")
+	assert.True(t, pass.DryRun)
+
+	f.out.Reset()
+	require.Error(t, runAutoWithLoader(t.Context(), f.loader, f.env, false))
+	assert.False(t, f.cleaned(), "the armed marker still forces a dry-run")
+	assert.Contains(t, f.out.String(), "first run after install-agent: dry-run")
+}
+
 func TestAuto_ExplicitDryRunKeepsMarker(t *testing.T) {
 	f := newAutoFixture(t, 100*autoGiB, "")
 	require.NoError(t, auto.MarkFirstRunPending(f.env.stateDir))
