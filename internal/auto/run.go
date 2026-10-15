@@ -353,27 +353,27 @@ func runCandidate(ctx context.Context, cfg *config.Config, c *candidate, tier Ti
 		return res
 	}
 
+	var (
+		reason string
+		ctxErr error
+	)
 	switch aware := p.(type) {
 	case provider.ProtectionAware:
 		aware.SetProtected(append(slices.Clone(protected), protectedRoots(deps.Home)...))
+		if _, root := p.(provider.RootGuarded); root {
+			reason, ctxErr = rootReason(ctx, p, deps.Home, protected)
+		}
 	case provider.PathGuarded:
-		reason, ctxErr := guardPaths(ctx, p, aware, deps.Home, protected)
-		if ctxErr != nil {
-			res.Status, res.Err = StatusError, ctxErr
-			return res
-		}
-		if reason != "" {
-			return skipped(res, reason)
-		}
+		reason, ctxErr = guardPaths(ctx, p, aware, deps.Home, protected)
 	default:
-		reason, ctxErr := protectedReason(ctx, p, c.cfg.Type == config.TypeDirPattern, deps.Home, protected)
-		if ctxErr != nil {
-			res.Status, res.Err = StatusError, ctxErr
-			return res
-		}
-		if reason != "" {
-			return skipped(res, reason)
-		}
+		reason, ctxErr = protectedReason(ctx, p, c.cfg.Type == config.TypeDirPattern, deps.Home, protected)
+	}
+	if ctxErr != nil {
+		res.Status, res.Err = StatusError, ctxErr
+		return res
+	}
+	if reason != "" {
+		return skipped(res, reason)
 	}
 	if !availableCtx(ctx, p) {
 		if err := ctx.Err(); err != nil {
@@ -468,6 +468,20 @@ func skipped(res Result, reason string) Result {
 func protectedReason(ctx context.Context, p provider.Provider, sweep bool, home string, protected []string) (string, error) {
 	for _, path := range p.Paths() {
 		reason, err := pathReason(ctx, path, sweep, true, home, protected)
+		if err != nil || reason != "" {
+			return reason, err
+		}
+	}
+	return "", nil
+}
+
+// rootReason is protectedReason for a cache directory that a provider hands to
+// its tool whole: the path is checked against the protected roots and the
+// checkouts around it, not scanned below, since the provider vouches for what
+// the directory holds.
+func rootReason(ctx context.Context, p provider.Provider, home string, protected []string) (string, error) {
+	for _, path := range p.Paths() {
+		reason, err := pathReason(ctx, path, false, false, home, protected)
 		if err != nil || reason != "" {
 			return reason, err
 		}

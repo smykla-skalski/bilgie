@@ -15,6 +15,17 @@ const (
 	configFile = "config.yaml"
 )
 
+// StateDir returns ~/.local/state/bilgie, where runs keep their locks and
+// markers. It ignores XDG_STATE_HOME on purpose: install-agent runs in a shell
+// and the agent under launchd, and both must find the same files.
+func StateDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("get home dir: %w", err)
+	}
+	return filepath.Join(home, ".local", "state", appname.Name), nil
+}
+
 // ExpandTilde replaces ~ prefix with home directory.
 func ExpandTilde(path string) (string, error) {
 	if !strings.HasPrefix(path, "~") {

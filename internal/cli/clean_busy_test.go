@@ -36,6 +36,8 @@ func busyUVLoader(t *testing.T, extra string) (loader *config.Loader, lockPath s
 	stubUVOnPath(t)
 
 	uvDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(uvDir, "CACHEDIR.TAG"),
+		[]byte("Signature: 8a477f597d28d172789f06886806bc55\n"), 0o600))
 	lockPath = filepath.Join(uvDir, ".lock")
 	release, acquired, err := osshim.TryLock(lockPath)
 	require.NoError(t, err)

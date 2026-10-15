@@ -27,7 +27,7 @@ func writeFile(t *testing.T, path, data string) {
 }
 
 func artifactTag() string {
-	return cargoTagSignature + "\n# This file is a cache directory tag created by cargo.\n"
+	return cacheDirTagSignature + "\n# This file is a cache directory tag created by cargo.\n"
 }
 
 func rustProject(t *testing.T, dir string, payload int, idle time.Duration) {
@@ -250,21 +250,21 @@ func TestProjectArtifacts_CargoTagMustLeadWithSignature(t *testing.T) {
 		want          bool
 	}{
 		{"cargo tag", artifactTag(), true},
-		{"crlf", cargoTagSignature + "\r\n# x\r\n", true},
-		{"signature only", cargoTagSignature, true},
+		{"crlf", cacheDirTagSignature + "\r\n# x\r\n", true},
+		{"signature only", cacheDirTagSignature, true},
 		{"wrong signature", "Signature: 0000\n", false},
-		{"signature on second line", "# c\n" + cargoTagSignature + "\n", false},
-		{"suffix garbage", cargoTagSignature + "ff\n", false},
+		{"signature on second line", "# c\n" + cacheDirTagSignature + "\n", false},
+		{"suffix garbage", cacheDirTagSignature + "ff\n", false},
 		{"empty", "", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			path := filepath.Join(dir, strings.ReplaceAll(tt.name, " ", "_"))
 			require.NoError(t, os.WriteFile(path, []byte(tt.content), 0o600))
-			assert.Equal(t, tt.want, validCargoTag(path))
+			assert.Equal(t, tt.want, validCacheDirTag(path))
 		})
 	}
-	assert.False(t, validCargoTag(filepath.Join(dir, "missing")))
+	assert.False(t, validCacheDirTag(filepath.Join(dir, "missing")))
 }
 
 func TestProjectArtifacts_DirtyTreeSkipped(t *testing.T) {

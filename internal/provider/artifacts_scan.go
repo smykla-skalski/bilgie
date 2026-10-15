@@ -33,7 +33,7 @@ const (
 	sampleLimit = 3000
 	sizeWorkers = 4
 
-	cargoTagSignature = "Signature: 8a477f597d28d172789f06886806bc55"
+	cacheDirTagSignature = "Signature: 8a477f597d28d172789f06886806bc55"
 )
 
 // trashPattern is the exact shape of the directories removeAside creates.
@@ -322,7 +322,7 @@ func markersValid(art *artifactDir) bool {
 	project := filepath.Dir(art.Path)
 	switch art.Kind {
 	case kindRust:
-		return isRegular(filepath.Join(project, "Cargo.toml")) && validCargoTag(filepath.Join(art.Path, "CACHEDIR.TAG"))
+		return isRegular(filepath.Join(project, "Cargo.toml")) && validCacheDirTag(filepath.Join(art.Path, "CACHEDIR.TAG"))
 	case kindNode:
 		return isRegular(filepath.Join(project, "package.json"))
 	case kindPython:
@@ -362,9 +362,9 @@ func escapeGlobMeta(dir string) string {
 	return strings.NewReplacer("[", "[[]", "*", "[*]", "?", "[?]").Replace(dir)
 }
 
-// validCargoTag accepts only a regular file whose first line is the cache
+// validCacheDirTag accepts only a regular file whose first line is the cache
 // directory tag signature cargo writes.
-func validCargoTag(path string) bool {
+func validCacheDirTag(path string) bool {
 	if !isRegular(path) {
 		return false
 	}
@@ -373,13 +373,13 @@ func validCargoTag(path string) bool {
 		return false
 	}
 	defer func() { _ = f.Close() }()
-	buf := make([]byte, len(cargoTagSignature)+2)
+	buf := make([]byte, len(cacheDirTagSignature)+2)
 	n, err := io.ReadFull(f, buf)
 	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
 		return false
 	}
 	first, _, _ := bytes.Cut(buf[:n], []byte("\n"))
-	return string(bytes.TrimRight(first, "\r")) == cargoTagSignature
+	return string(bytes.TrimRight(first, "\r")) == cacheDirTagSignature
 }
 
 func sizeArtifacts(ctx context.Context, scan *artifactScan) error {

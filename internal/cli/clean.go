@@ -157,8 +157,7 @@ func allProviders(names []string, smart bool) []string {
 
 func resolveProviders(cfg *config.Config, args []string, allFlag, smart bool) ([]string, error) {
 	if len(args) == 0 && !allFlag {
-		available := cfg.EnabledProviders()
-		return nil, fmt.Errorf("specify providers or use --all\nAvailable: %s", strings.Join(available, ", "))
+		return nil, fmt.Errorf("specify providers or use --all\n%s", availableLine(cfg.EnabledProviders()))
 	}
 
 	if allFlag {
@@ -181,13 +180,22 @@ func resolveProviders(cfg *config.Config, args []string, allFlag, smart bool) ([
 		missing, unknown := splitMissingCache(cfg, invalid)
 		lines := missing
 		if len(unknown) > 0 {
-			lines = append(lines, fmt.Sprintf("unknown providers: %s\nAvailable: %s",
-				strings.Join(unknown, ", "), strings.Join(cfg.EnabledProviders(), ", ")))
+			lines = append(lines, fmt.Sprintf("unknown providers: %s\n%s",
+				strings.Join(unknown, ", "), availableLine(cfg.EnabledProviders())))
 		}
 		return nil, fmt.Errorf("%s", strings.Join(lines, "\n"))
 	}
 
 	return args, nil
+}
+
+// availableLine names the providers a user can pick, or says there are none
+// instead of printing an empty list.
+func availableLine(names []string) string {
+	if len(names) == 0 {
+		return "No providers are enabled with an existing cache directory"
+	}
+	return "Available: " + strings.Join(names, ", ")
 }
 
 // splitMissingCache separates the requested providers that are enabled but

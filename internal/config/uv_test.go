@@ -115,3 +115,98 @@ func TestLoader_UVEnabledFlagMerge(t *testing.T) {
 	explicitOff := loadUVConfig(t, "version: \"1\"\nproviders:\n  uv:\n    enabled: false\n")
 	assert.False(t, explicitOff.Providers["uv"].Enabled)
 }
+
+func TestResolveUVCacheDir_RejectsPathsThatStayRelativeAfterExpansion(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Chdir(home)
+
+	spellings := []string{`\x`, `\cache\uv`}
+	if runtime.GOOS != "windows" {
+		spellings = append(spellings, `\\x`, `~\x`, `~\cache\uv`)
+	}
+	for _, spelled := range spellings {
+		t.Run(spelled, func(t *testing.T) {
+			dir, err := ResolveUVCacheDir([]string{spelled})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "must be absolute or start with ~/")
+			assert.Empty(t, dir)
+		})
+	}
+}
+
+func TestResolveUVCacheDir_AcceptsTildeAndAbsolute(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("UV_CACHE_DIR", "")
+	t.Setenv("XDG_CACHE_HOME", "")
+	abs := filepath.Join(filepath.Clean(t.TempDir()), "uvc")
+
+	got, err := ResolveUVCacheDir([]string{abs})
+	require.NoError(t, err)
+	assert.Equal(t, abs, got)
+
+	got, err = ResolveUVCacheDir([]string{"~/custom/uv"})
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(home, "custom", "uv"), got)
+}
+
+func TestProvider_PathError(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	abs := filepath.Clean(t.TempDir())
+
+	for _, ok := range [][]string{nil, {abs}, {"~"}, {"~/x"}, {abs, "~/y/*"}} {
+		assert.NoError(t, Provider{Paths: ok}.PathError(), "%v", ok)
+	}
+	bad := [][]string{{"Documents"}, {"."}, {"a/../b"}, {abs, "rel"}, {"~user/x"}, {""}, {`\x\cache`}}
+	if runtime.GOOS != "windows" {
+		bad = append(bad, []string{`~\x`}, []string{`C:/x`}, []string{`C:\x`})
+	}
+	for _, paths := range bad {
+		err := Provider{Paths: paths}.PathError()
+		require.Error(t, err, "%v", paths)
+		assert.Contains(t, err.Error(), "must be absolute or start with ~/")
+	}
+}
+
+func TestEnabledProviders_RelativePathsStayVisibleWhateverTheCwd(t *testing.T) {
+	cwd := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(cwd, "Documents"), 0o700))
+	t.Chdir(cwd)
+	cfg := &Config{Providers: map[string]Provider{
+		"go-build": {Enabled: true, Paths: []string{"Documents"}, MaxSize: "1G"},
+		"absent":   {Enabled: true, Paths: []string{filepath.Join(t.TempDir(), "none")}, MaxSize: "1G"},
+	}}
+
+	assert.Equal(t, []string{"go-build"}, cfg.EnabledProviders(), "present or not, the relative path is reported")
+
+	require.NoError(t, os.RemoveAll(filepath.Join(cwd, "Documents")))
+	assert.Equal(t, []string{"go-build"}, cfg.EnabledProviders())
+}
+
+func TestStateDir_IgnoresXDGStateHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	dir, err := StateDir()
+
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(home, ".local", "state", "bilgie"), dir)
+}
+
+func TestProvider_PathError_NoHome(t *testing.T) {
+	t.Setenv("HOME", "")
+	t.Setenv("USERPROFILE", "")
+
+	err := Provider{Paths: []string{"~/x"}}.PathError()
+
+	require.Error(t, err)
+	_, stateErr := StateDir()
+	require.Error(t, stateErr)
+}
