@@ -296,8 +296,8 @@ func printNotes(w io.Writer, cands []discover.Candidate) {
 		if c.Kind != discover.KindUnmanaged {
 			printPaths(w, c.Paths)
 		}
-		if c.Define != nil && c.Suggested() {
-			fmt.Fprintf(w, "    entry: type %s, path %s, min_idle %s, max_size %s\n", c.Define.Type, c.Define.Paths[0], c.Define.MinIdle, c.Define.MaxSize)
+		if c.Entry != nil && c.Suggested() {
+			fmt.Fprintf(w, "    entry: type %s, path %s, min_idle %s, max_size %s\n", c.Entry.Type, c.Entry.Paths[0], c.Entry.MinIdle, c.Entry.MaxSize)
 		}
 	}
 }

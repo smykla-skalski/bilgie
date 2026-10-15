@@ -355,3 +355,64 @@ func TestCustomProvider(t *testing.T) {
 		})
 	}
 }
+
+func TestRun_UnmanagedProtectedNamesAreNeverSuggested(t *testing.T) {
+	s := newSandbox(t)
+	cacheRoot := filepath.Join(s.home, ".cache")
+	for _, dir := range []string{"Downloads", "worktrees", "plain"} {
+		s.fill(filepath.Join(cacheRoot, dir), 1<<16)
+	}
+	opts := s.options()
+	opts.Sizes = false
+	opts.Roots = []string{cacheRoot}
+	opts.Unmanaged = 10
+	opts.UnmanagedMin = 1
+
+	report := Run(context.Background(), opts)
+
+	assert.Equal(t, ActionEnable, find(t, report, "custom-plain").Action)
+	for _, dir := range []string{"Downloads", "worktrees"} {
+		c := find(t, report, filepath.Join(cacheRoot, dir))
+		assert.Equal(t, TierProtected, c.Tier, dir)
+		assert.Equal(t, ActionNever, c.Action, dir)
+		assert.Nil(t, c.Define, dir)
+	}
+}
+
+func TestRun_DisabledProvidersAreNotOfferedAgainAsCustomSweeps(t *testing.T) {
+	s := newSandbox(t)
+	s.disable("pip")
+	hub := s.cacheOf("huggingface")
+	s.fill(hub, 1<<16)
+	s.fill(s.cacheOf("pip"), 1<<16)
+	opts := s.options()
+	opts.Sizes = false
+	opts.Roots = []string{filepath.Dir(filepath.Dir(hub)), filepath.Dir(s.cacheOf("pip"))}
+	opts.Unmanaged = 10
+	opts.UnmanagedMin = 1
+
+	report := Run(context.Background(), opts)
+
+	assert.Equal(t, ActionOptIn, find(t, report, "huggingface").Action)
+	for _, c := range report.Candidates {
+		assert.NotEqual(t, KindUnmanaged, c.Kind, c.Name)
+	}
+}
+
+func TestRun_UnmanagedCandidatesCarryTheirEntry(t *testing.T) {
+	s := newSandbox(t)
+	cacheRoot := filepath.Join(s.home, ".cache")
+	s.fill(filepath.Join(cacheRoot, "bigtool"), 1<<16)
+	opts := s.options()
+	opts.Sizes = false
+	opts.Roots = []string{cacheRoot}
+	opts.Unmanaged = 5
+	opts.UnmanagedMin = 1
+
+	got := find(t, Run(context.Background(), opts), "custom-bigtool")
+
+	require.NotNil(t, got.Entry)
+	assert.Equal(t, config.TypeDirPattern, got.Entry.Type)
+	assert.Equal(t, got.Define.Paths, got.Entry.Paths)
+	assert.NotEmpty(t, got.Entry.MinIdle)
+}

@@ -70,7 +70,7 @@ func DefaultRoots(home string) []string {
 func unmanaged(ctx context.Context, opts Options, report *Report) []Candidate {
 	scan := auto.ScanUnmanaged(ctx, auto.ScanOptions{
 		Roots:    opts.Roots,
-		Covered:  auto.CoveredPaths(opts.Cfg),
+		Covered:  auto.CoveredPaths(allEnabled(opts.Cfg)),
 		Top:      opts.Unmanaged,
 		MinBytes: opts.UnmanagedMin,
 		Budget:   opts.UnmanagedBudget,
@@ -102,6 +102,20 @@ func unmanaged(ctx context.Context, opts Options, report *Report) []Candidate {
 	return out
 }
 
+// allEnabled is cfg with every provider on, so the scan treats the paths of
+// providers that are off as covered: they are already suggested by name, and
+// offering the same directory again as a custom sweep would bypass their tier.
+func allEnabled(cfg *config.Config) *config.Config {
+	probe := *cfg
+	probe.Providers = make(map[string]config.Provider, len(cfg.Providers))
+	for name := range cfg.Providers {
+		pc := cfg.Providers[name]
+		pc.Enabled = true
+		probe.Providers[name] = pc
+	}
+	return &probe
+}
+
 func classifyDir(ctx context.Context, c *Candidate, opts Options, protected []string, taken map[string]bool) {
 	reason, err := auto.PathProtection(ctx, c.Paths[0], opts.Home, protected)
 	switch {
@@ -131,6 +145,7 @@ func classifyDir(ctx context.Context, c *Candidate, opts Options, protected []st
 		return
 	}
 	c.Define = &def
+	c.Entry = &Entry{Type: def.Type, Paths: def.Paths, MaxSize: def.MaxSize, MinIdle: def.MinIdle}
 	taken[c.Name] = true
 }
 

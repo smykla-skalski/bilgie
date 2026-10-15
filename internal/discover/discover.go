@@ -25,10 +25,19 @@ const (
 
 const sizeWorkers = 4
 
+// Entry is the dir-pattern entry --write adds for an unmanaged directory.
+type Entry struct {
+	Type    string   `json:"type"`
+	MaxSize string   `json:"max_size"`
+	MinIdle string   `json:"min_idle"`
+	Paths   []string `json:"paths"`
+}
+
 // Candidate is one provider or unmanaged directory discover looked at.
 type Candidate struct {
 	Modified   *time.Time       `json:"modified,omitempty"`
 	Define     *config.Provider `json:"-"`
+	Entry      *Entry           `json:"entry,omitempty"`
 	Name       string           `json:"name"`
 	Kind       string           `json:"kind"`
 	Tier       Tier             `json:"tier"`

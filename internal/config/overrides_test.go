@@ -191,3 +191,50 @@ func TestWriteOverrides_TurnsOnADisabledEntryWithNoOtherChange(t *testing.T) {
 	require.NoError(t, err)
 	assert.YAMLEq(t, "providers:\n  npm:\n    enabled: true\n", string(data))
 }
+
+func TestWriteOverrides_RefusesAFileWithSeveralDocuments(t *testing.T) {
+	content := "providers:\n  npm:\n    max_size: 1G\n---\nextra: 1\n"
+	loader, path := overridesLoader(t, content)
+
+	_, err := loader.WriteOverrides([]Override{{Name: "npm"}})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "more than one YAML document")
+	data, readErr := os.ReadFile(path)
+	require.NoError(t, readErr)
+	assert.Equal(t, content, string(data))
+}
+
+func TestWriteOverrides_KeepsTheCommentsOfAnOtherwiseEmptyFile(t *testing.T) {
+	loader, path := overridesLoader(t, "# template stub")
+
+	changed, err := loader.WriteOverrides([]Override{{Name: "npm"}})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"npm"}, changed)
+	data, readErr := os.ReadFile(path)
+	require.NoError(t, readErr)
+	assert.True(t, len(data) > 0 && string(data[:15]) == "# template stub")
+	cfg, err := loader.Load()
+	require.NoError(t, err)
+	assert.True(t, cfg.Providers["npm"].Enabled)
+}
+
+func TestWriteOverrides_EditsAnAliasedEntryWithoutTouchingItsAnchor(t *testing.T) {
+	loader, _ := overridesLoader(t, `providers:
+  pip: &base
+    enabled: false
+    max_size: 2G
+  npm: *base
+`)
+
+	changed, err := loader.WriteOverrides([]Override{{Name: "npm"}})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"npm"}, changed)
+	cfg, err := loader.Load()
+	require.NoError(t, err)
+	assert.True(t, cfg.Providers["npm"].Enabled)
+	assert.Equal(t, "2G", cfg.Providers["npm"].MaxSize)
+	assert.False(t, cfg.Providers["pip"].Enabled)
+}

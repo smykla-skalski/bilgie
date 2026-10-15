@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,7 +41,7 @@ func (l *Loader) WriteOverrides(entries []Override) ([]string, error) {
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
-	root, err := parseRoot(data)
+	root, prefix, err := parseRoot(data)
 	if err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
@@ -67,6 +68,7 @@ func (l *Loader) WriteOverrides(entries []Override) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	out = append(prefix, out...)
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return nil, fmt.Errorf("create config dir: %w", err)
 	}
@@ -91,26 +93,43 @@ func validateOverride(e Override) error {
 	return nil
 }
 
-// parseRoot returns the top-level mapping of the document, creating it for an
-// empty file.
-func parseRoot(data []byte) (*yaml.Node, error) {
-	if len(bytes.TrimSpace(data)) == 0 {
-		root := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-		setKey(root, "version", scalar(currentVersion, "!!str"))
-		return root, nil
+// parseRoot returns the document node of the file. A file with no content, or
+// only comments, gets a fresh mapping and the original text comes back as the
+// prefix to keep in front of it. A file with several documents is refused:
+// re-encoding would drop all but the first.
+func parseRoot(data []byte) (doc *yaml.Node, prefix []byte, err error) {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	var first yaml.Node
+	switch err := dec.Decode(&first); {
+	case errors.Is(err, io.EOF):
+		return newRoot(), withNewline(data), nil
+	case err != nil:
+		return nil, nil, err
 	}
-	var doc yaml.Node
-	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return nil, err
+	var next yaml.Node
+	if err := dec.Decode(&next); !errors.Is(err, io.EOF) {
+		return nil, nil, errors.New("the file holds more than one YAML document; merge them first")
 	}
-	if doc.Kind != yaml.DocumentNode || len(doc.Content) != 1 {
-		return nil, errors.New("not a YAML document")
+	if first.Kind != yaml.DocumentNode || len(first.Content) != 1 {
+		return nil, nil, errors.New("not a YAML document")
 	}
-	root := doc.Content[0]
-	if root.Kind != yaml.MappingNode {
-		return nil, errors.New("the top level is not a mapping")
+	if first.Content[0].Kind != yaml.MappingNode {
+		return nil, nil, errors.New("the top level is not a mapping")
 	}
-	return &doc, nil
+	return &first, nil, nil
+}
+
+func newRoot() *yaml.Node {
+	root := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	setKey(root, "version", scalar(currentVersion, "!!str"))
+	return root
+}
+
+func withNewline(data []byte) []byte {
+	if len(data) == 0 || data[len(data)-1] == '\n' {
+		return data
+	}
+	return append(data, '\n')
 }
 
 // encodeRoot renders a node produced by parseRoot.
@@ -191,6 +210,9 @@ func applyOverride(providers *yaml.Node, e Override) (bool, error) {
 		return true, nil
 	}
 
+	if entry.Kind == yaml.AliasNode && entry.Alias != nil {
+		*entry = *deepCopy(entry.Alias)
+	}
 	if entry.Kind == yaml.ScalarNode && entry.Tag == "!!null" {
 		*entry = yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 	}
@@ -209,4 +231,16 @@ func applyOverride(providers *yaml.Node, e Override) (bool, error) {
 		enabled.Kind, enabled.Tag, enabled.Value, enabled.Style = yaml.ScalarNode, "!!bool", "true", 0
 	}
 	return true, nil
+}
+
+// deepCopy duplicates a node so an entry that was an alias can be edited
+// without changing the anchor it pointed at.
+func deepCopy(n *yaml.Node) *yaml.Node {
+	c := *n
+	c.Anchor = ""
+	c.Content = make([]*yaml.Node, len(n.Content))
+	for i, child := range n.Content {
+		c.Content[i] = deepCopy(child)
+	}
+	return &c
 }
