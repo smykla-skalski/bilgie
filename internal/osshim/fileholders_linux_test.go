@@ -11,8 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func isLinux() bool { return true }
-
 func TestHoldersFromProc(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(t.TempDir(), ".lock")
@@ -25,4 +23,10 @@ func TestHoldersFromProc(t *testing.T) {
 	holders, err := holdersFromProc(t.Context(), root, target, os.Getuid())
 	require.NoError(t, err)
 	assert.Equal(t, []int{100}, holders)
+}
+
+func TestHoldersFromProcMissingFileHasNoHolders(t *testing.T) {
+	holders, err := holdersFromProc(t.Context(), t.TempDir(), filepath.Join(t.TempDir(), "absent"), os.Getuid())
+	require.NoError(t, err)
+	assert.Empty(t, holders)
 }

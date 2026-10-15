@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build !linux && !windows
 
 package osshim
 
@@ -13,7 +13,7 @@ import (
 )
 
 func TestFileHolders(t *testing.T) {
-	if _, err := exec.LookPath("lsof"); err != nil && !isLinux() {
+	if _, err := exec.LookPath("lsof"); err != nil {
 		t.Skip("lsof not installed")
 	}
 	path := filepath.Join(t.TempDir(), ".lock")

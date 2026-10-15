@@ -9,8 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func isLinux() bool { return false }
-
 func TestParsePIDs(t *testing.T) {
 	pids, err := parsePIDs("123\n456\n")
 	require.NoError(t, err)
