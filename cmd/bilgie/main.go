@@ -42,6 +42,8 @@ func init() {
 	rootCmd.AddCommand(cli.DoctorCmd)
 	rootCmd.AddCommand(cli.DiscoverCmd)
 	rootCmd.AddCommand(cli.InstallAgentCmd)
+	rootCmd.AddCommand(cli.ArmCmd)
+	rootCmd.AddCommand(cli.DisarmCmd)
 	rootCmd.AddCommand(cli.UninstallAgentCmd)
 }
 

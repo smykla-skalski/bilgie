@@ -24,6 +24,7 @@ var DoctorCmd = &cobra.Command{
   agent      installed and loaded in the scheduler of this OS
   cadence    tick and full-pass intervals, the last tick and the next expected full pass
   last run   time, tier, bytes freed and errors from runs.jsonl
+  first run  whether the next real pass deletes or only previews (see bilgie arm and disarm)
   free space current free space and its 7-day trend from the run history
   config     disabled providers, providers skipped on every recent run, protected-path conflicts
   memory     swap in use against auto.swap_warn, with the largest process families when it is high

@@ -144,6 +144,7 @@ func Diagnose(in Input) Report {
 	findings = append(findings, linkFindings(in)...)
 	findings = append(findings, cadenceFindings(in)...)
 	findings = append(findings, lastRunFindings(in)...)
+	findings = append(findings, firstRunFinding(in))
 	findings = append(findings, freeSpaceFindings(in)...)
 	findings = append(findings, memoryFindings(in)...)
 	findings = append(findings, configFindings(in)...)
@@ -414,13 +415,23 @@ func extraRunNotes(in Input) []Finding {
 			Message: fmt.Sprintf("%d unreadable line(s) in the run log were skipped", in.Corrupt),
 		})
 	}
-	if in.FirstRunPending {
-		out = append(out, Finding{
-			Area: "first run", Level: Note,
-			Message: "the first run is still a dry-run: nothing is deleted until it completes",
-		})
-	}
 	return out
+}
+
+// firstRunFinding always says whether the next real pass deletes or only
+// previews, naming the command that flips it. Write prints hints only for
+// warnings, so the command sits in the message.
+func firstRunFinding(in Input) Finding {
+	if in.FirstRunPending {
+		return Finding{
+			Area: "first run", Level: Note,
+			Message: auto.ArmedDetail + " (run: bilgie disarm to let it delete)",
+		}
+	}
+	return Finding{
+		Area:    "first run",
+		Message: auto.DisarmedDetail + " (run: bilgie arm to preview first)",
+	}
 }
 
 func freeSpaceFindings(in Input) []Finding {

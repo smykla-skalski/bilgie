@@ -148,8 +148,10 @@ func TestDiagnose_Findings(t *testing.T) {
 			in.GOOS, in.NotifierProgram, in.NotifierErr = "windows", "powershell.exe", errors.New("nf")
 		}, "notifier", "powershell.exe not found", "PATH", Warn},
 		{"notifier ok", func(*Input) {}, "notifier", "notify-send is available", "", OK},
-		{"first run pending", func(in *Input) { in.FirstRunPending = true },
-			"first run", "still a dry-run", "", Note},
+		{"first run armed", func(in *Input) { in.FirstRunPending = true },
+			"first run", "the next real pass only previews and deletes nothing (run: bilgie disarm", "", Note},
+		{"first run disarmed", func(*Input) {},
+			"first run", "the next real pass deletes (run: bilgie arm", "", OK},
 		{"corrupt log", func(in *Input) { in.Corrupt = 3 },
 			"history", "3 unreadable line(s)", "", Note},
 	}

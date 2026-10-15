@@ -62,3 +62,22 @@ func TestExecute_ConfigLoadFailureDoesNotPrintUsage(t *testing.T) {
 		})
 	}
 }
+
+func TestExecute_ArmAndDisarmFlipTheMarker(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	run := func(arg string) {
+		t.Helper()
+		rootCmd.SetArgs([]string{arg})
+		t.Cleanup(func() { rootCmd.SetArgs(nil) })
+		require.Equal(t, 0, execute(os.Stderr))
+	}
+	marker := filepath.Join(home, ".local", "state", "bilgie", "first-run-pending")
+
+	run("arm")
+	assert.FileExists(t, marker)
+	run("disarm")
+	assert.NoFileExists(t, marker)
+}
