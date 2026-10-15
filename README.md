@@ -291,6 +291,43 @@ auto-deleted)": the `protected` list, `worktrees` directories and git checkouts 
 measured with the same kind of bounded scan (10 second budget, Ctrl-C stops it, partial sizes are marked
 "at least"). `--json` adds a `protected` object with `entries` and `incomplete`.
 
+### discover
+
+```bash
+bilgie discover                  # List the providers this machine needs
+bilgie discover --json           # The same for tools
+bilgie discover --write          # Ask about each suggestion, then add the accepted ones to the config
+bilgie discover --write --yes    # Add every regenerable suggestion without asking
+bilgie discover --write --yes huggingface   # Add the named providers (opt-in ones too)
+bilgie discover --all            # Also list providers with no cache or tool on this machine
+bilgie discover --unmanaged 20   # List more unmanaged directories (0 turns the scan off)
+```
+
+`discover` answers "which providers do I need on this machine, and which are safe to turn on?". It
+only reads: it never deletes anything and, without `--write`, never changes the config. For every
+built-in provider that applies on this OS it reports whether the cache location exists, whether the
+tool is on `PATH`, the size, the age of the newest change, and whether the provider is enabled. It
+also lists the largest directories no provider covers (the same scan as `status --unmanaged`, plus
+`~/.cache`) and suggests a custom `dir-pattern` entry for each one.
+
+Each candidate has a tier and an action:
+
+| Tier | Meaning | Action |
+|------|---------|--------|
+| `regenerable` | The tool rebuilds the cache. A directory in a cache location (`~/.cache/*`, `~/Library/Caches/*`) counts. | `enable` when it is off |
+| `opt-in` | Costly to rebuild or depends on how the machine is used (huggingface, playwright, rustup, codex-sessions, docker, go-mod, mise, project-artifacts, directories outside a cache location, Apple-owned caches); the reason is printed. | `opt-in` when it is off |
+| `protected` | Never cleaned and never suggested. It is decided by the same checks a clean pass runs: protected paths (`Downloads`, opencode and your `protected` list), git checkouts, Xcode archives and docker volumes. A path whose check cannot finish counts as protected. | `never` |
+
+`--write` merges only what you accept into the config file: the provider gets `enabled: true`, a
+suggested unmanaged directory gets its `dir-pattern` entry, and every other key and comment stays as
+it is. Defaults are never dumped into the file, so a later default change still applies. Without
+`--yes` it asks per suggestion and needs a terminal; with `--yes` it takes every regenerable
+suggestion, or exactly the providers you name, and naming a protected one is an error. `--json` with
+`--write` needs `--yes`.
+
+`install-agent` and `doctor` mention the number of suggestions (`doctor` as a note that does not
+change its exit code); neither enables anything.
+
 ### clean
 
 ```bash
@@ -486,7 +523,7 @@ the cadence (tick and full-pass intervals), the last tick (it must be recent for
 means the installed agent is still the old 30-minute `auto` one) and the next expected full pass, the last run (time, tier, bytes freed, errors from `runs.jsonl`) is recent for `auto.interval`,
 free space is above the floors, the 7-day free-space trend from the run history, config problems
 (disabled providers, providers skipped on each of the last runs for a reason other than
-"within limit", providers on protected paths, providers whose config does not load), swap and memory, and whether the notifier program exists.
+"within limit", providers on protected paths, providers whose config does not load), swap and memory, and whether the notifier program exists, plus a note when `bilgie discover` has providers to suggest.
 It exits non-zero when a finding needs attention; each one carries a "what to do" line.
 
 ```text

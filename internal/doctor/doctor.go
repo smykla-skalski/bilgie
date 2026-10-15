@@ -114,6 +114,8 @@ type Input struct {
 	NotifierErr     error
 
 	Conflicts []auto.Conflict
+	// Suggested names the providers discover offers for enabling.
+	Suggested []string
 	// LoadErrors are enabled providers whose config does not load; each
 	// reads "provider <name>: <reason>".
 	LoadErrors []error
@@ -145,6 +147,7 @@ func Diagnose(in Input) Report {
 	findings = append(findings, freeSpaceFindings(in)...)
 	findings = append(findings, memoryFindings(in)...)
 	findings = append(findings, configFindings(in)...)
+	findings = append(findings, discoverFindings(in)...)
 	findings = append(findings, notifierFinding(in))
 	return Report{Findings: findings}
 }
@@ -598,6 +601,25 @@ func configFindings(in Input) []Finding {
 		out = append(out, Finding{Area: "config", Message: "no provider problems found"})
 	}
 	return out
+}
+
+// suggestedShown caps the names a discover note lists.
+const suggestedShown = 5
+
+func discoverFindings(in Input) []Finding {
+	if in.Cfg == nil || len(in.Suggested) == 0 {
+		return nil
+	}
+	shown := in.Suggested
+	more := ""
+	if len(shown) > suggestedShown {
+		more = fmt.Sprintf(" and %d more", len(shown)-suggestedShown)
+		shown = shown[:suggestedShown]
+	}
+	return []Finding{{
+		Area: "discover", Level: Note,
+		Message: fmt.Sprintf("%d provider(s) could be enabled: %s%s; run: bilgie discover", len(in.Suggested), strings.Join(shown, ", "), more),
+	}}
 }
 
 func disabledFinding(cfg *config.Config) (Finding, bool) {

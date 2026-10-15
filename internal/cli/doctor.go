@@ -28,6 +28,7 @@ var DoctorCmd = &cobra.Command{
   config     disabled providers, providers skipped on every recent run, protected-path conflicts
   memory     swap in use against auto.swap_warn, with the largest process families when it is high
   notifier   whether the low-space notification program exists
+  discover   a note naming the providers bilgie discover would offer to enable
 
 Exits non-zero when a finding needs attention; each one says what to do.`,
 	Args:         cobra.NoArgs,
@@ -82,6 +83,7 @@ func runDoctorWithLoader(ctx context.Context, loader *config.Loader, env autoEnv
 	if cfg != nil {
 		in.Conflicts = auto.ProtectionConflicts(ctx, cfg, env.home, env.newProvider)
 		in.LoadErrors = auto.LoadErrors(cfg, env.newProvider)
+		in.Suggested = suggestionNames(ctx, cfg, env.home, lookPath, env.newProvider)
 	}
 
 	fillMemory(ctx, &in, env)

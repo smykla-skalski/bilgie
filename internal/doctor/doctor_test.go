@@ -378,3 +378,34 @@ func TestDiagnose_ProviderLoadErrorIsNamed(t *testing.T) {
 	assert.Contains(t, f.Hint, "providers.sail-dirs")
 	assert.Positive(t, r.Attention())
 }
+
+func TestDiagnose_DiscoverNoteNamesSuggestionsWithoutNeedingAttention(t *testing.T) {
+	in := healthy()
+	in.Suggested = []string{"huggingface", "playwright"}
+
+	rep := Diagnose(in)
+
+	assert.Zero(t, rep.Attention())
+	var buf bytes.Buffer
+	rep.Write(&buf)
+	assert.Contains(t, buf.String(), "[note] discover: 2 provider(s) could be enabled: huggingface, playwright; run: bilgie discover")
+	assert.Contains(t, buf.String(), "all good")
+}
+
+func TestDiagnose_DiscoverNoteCapsTheNames(t *testing.T) {
+	in := healthy()
+	in.Suggested = []string{"a", "b", "c", "d", "e", "f", "g"}
+
+	rep := Diagnose(in)
+
+	var buf bytes.Buffer
+	rep.Write(&buf)
+	assert.Contains(t, buf.String(), "7 provider(s) could be enabled: a, b, c, d, e and 2 more")
+}
+
+func TestDiagnose_NoDiscoverNoteWithoutSuggestions(t *testing.T) {
+	var buf bytes.Buffer
+	Diagnose(healthy()).Write(&buf)
+
+	assert.NotContains(t, buf.String(), "discover")
+}
