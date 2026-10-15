@@ -433,3 +433,28 @@ func TestRun_RecordsAProviderThatCannotBeMeasured(t *testing.T) {
 	assert.Equal(t, errNotFound.Error(), got.Error)
 	assert.Zero(t, got.Bytes)
 }
+
+func TestRun_UnmanagedDirectoriesHoldingDeepCheckoutsOrProtectedNamesAreNeverSuggested(t *testing.T) {
+	s := newSandbox(t)
+	cacheRoot := filepath.Join(s.home, ".cache")
+	s.fill(filepath.Join(cacheRoot, "plain", "a", "b"), 1<<16)
+	s.fill(filepath.Join(cacheRoot, "deepgit", "a", "b", "c", "d", "e"), 1<<16)
+	require.NoError(t, os.MkdirAll(filepath.Join(cacheRoot, "deepgit", "a", "b", "c", "d", "e", ".git"), 0o750))
+	s.fill(filepath.Join(cacheRoot, "deepname", "a", "b", "c", "d", "Downloads"), 1<<16)
+	s.fill(filepath.Join(cacheRoot, "deeptrees", "a", "worktrees"), 1<<16)
+	opts := s.options()
+	opts.Sizes = false
+	opts.Roots = []string{cacheRoot}
+	opts.Unmanaged = 10
+	opts.UnmanagedMin = 1
+
+	report := Run(context.Background(), opts)
+
+	assert.Equal(t, ActionEnable, find(t, report, "custom-plain").Action)
+	for _, dir := range []string{"deepgit", "deepname", "deeptrees"} {
+		c := find(t, report, filepath.Join(cacheRoot, dir))
+		assert.Equal(t, TierProtected, c.Tier, dir)
+		assert.Equal(t, ActionNever, c.Action, dir)
+		assert.Nil(t, c.Define, dir)
+	}
+}

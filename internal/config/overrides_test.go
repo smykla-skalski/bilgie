@@ -9,8 +9,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func isolateHome(t *testing.T) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+}
+
 func overridesLoader(t *testing.T, content string) (loader *Loader, path string) {
 	t.Helper()
+	isolateHome(t)
 	path = filepath.Join(t.TempDir(), "sub", "config.yaml")
 	if content != "" {
 		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o750))

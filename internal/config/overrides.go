@@ -23,59 +23,109 @@ type Override struct {
 }
 
 // WriteOverrides merges the entries into the config file and touches nothing
-// else: unrelated keys, comments and order stay as they are, and defaults are
-// never dumped into the file. A missing file is created. It returns the names
-// whose entry changed.
+// else: unrelated keys, comments, blank lines, line endings and order stay as
+// they are, and defaults are never dumped into the file. A missing file is
+// created. A symbolic link at the path is followed, and the write is atomic
+// and serialized with other writers. It returns the names whose entry
+// changed.
 func (l *Loader) WriteOverrides(entries []Override) ([]string, error) {
 	path, err := l.path()
 	if err != nil {
 		return nil, err
 	}
+	entries = uniqueOverrides(entries)
 	for _, e := range entries {
 		if err := validateOverride(e); err != nil {
 			return nil, err
 		}
 	}
+	if len(entries) == 0 {
+		return nil, nil
+	}
 
-	data, err := fsx.ReadRegular(path, maxConfigBytes)
+	target, err := resolveLink(path)
+	if err != nil {
+		return nil, fmt.Errorf("write config: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
+		return nil, fmt.Errorf("create config dir: %w", err)
+	}
+	release, err := lockConfig(target)
+	if err != nil {
+		return nil, fmt.Errorf("write config: %w", err)
+	}
+	defer release()
+
+	data, err := fsx.ReadRegular(target, maxConfigBytes)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
-	root, prefix, err := parseRoot(data)
-	if err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
-	}
-	providers, err := childMapping(root, "providers")
+	out, changed, err := planOverrides(path, data, entries)
 	if err != nil {
 		return nil, err
 	}
+	if len(changed) == 0 {
+		return nil, nil
+	}
+	if err := writeAtomic(target, out); err != nil {
+		return nil, fmt.Errorf("write config: %w", err)
+	}
+	return changed, nil
+}
 
-	var changed []string
+// uniqueOverrides drops a repeated name: the first entry for it wins.
+func uniqueOverrides(entries []Override) []Override {
+	seen := make(map[string]bool, len(entries))
+	out := make([]Override, 0, len(entries))
+	for _, e := range entries {
+		if e.Name != "" && seen[e.Name] {
+			continue
+		}
+		seen[e.Name] = true
+		out = append(out, e)
+	}
+	return out
+}
+
+// planOverrides returns the new file content and the names that change. The
+// structure is checked and the change decided on the parsed document; the
+// text is then edited in place so the rest of the file stays byte for byte as
+// it was. A shape the in-place edit cannot handle, or an edit that does not
+// decode to the same config as the re-encoded document, falls back to
+// re-encoding the whole file.
+func planOverrides(path string, data []byte, entries []Override) (out []byte, changed []string, err error) {
+	root, prefix, err := parseRoot(data)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	providers, err := childMapping(root, "providers")
+	if err != nil {
+		return nil, nil, err
+	}
 	for _, e := range entries {
 		did, err := applyOverride(providers, e)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if did {
 			changed = append(changed, e.Name)
 		}
 	}
 	if len(changed) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
-	out, err := encodeRoot(root)
+	encoded, err := encodeRoot(root)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	out = append(prefix, out...)
-	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		return nil, fmt.Errorf("create config dir: %w", err)
+	encoded = matchLineEndings(data, encoded)
+	if prefix == nil {
+		if spliced, ok := spliceOverrides(data, entries, changed); ok && sameConfig(spliced, encoded) {
+			return spliced, changed, nil
+		}
 	}
-	if err := os.WriteFile(path, out, 0o600); err != nil {
-		return nil, fmt.Errorf("write config: %w", err)
-	}
-	return changed, nil
+	return append(prefix, encoded...), changed, nil
 }
 
 func validateOverride(e Override) error {
@@ -238,6 +288,7 @@ func applyOverride(providers *yaml.Node, e Override) (bool, error) {
 func deepCopy(n *yaml.Node) *yaml.Node {
 	c := *n
 	c.Anchor = ""
+	c.HeadComment, c.LineComment, c.FootComment = "", "", ""
 	c.Content = make([]*yaml.Node, len(n.Content))
 	for i, child := range n.Content {
 		c.Content[i] = deepCopy(child)

@@ -316,14 +316,16 @@ Each candidate has a tier and an action:
 |------|---------|--------|
 | `regenerable` | The tool rebuilds the cache. A directory in a cache location (`~/.cache/*`, `~/Library/Caches/*`) counts. | `enable` when it is off |
 | `opt-in` | Costly to rebuild or depends on how the machine is used (huggingface, playwright, rustup, codex-sessions, docker, go-mod, mise, project-artifacts, directories outside a cache location, Apple-owned caches); the reason is printed. | `opt-in` when it is off |
-| `protected` | Never cleaned and never suggested. It is decided by the same checks a clean pass runs: protected paths (`Downloads`, opencode and your `protected` list), git checkouts, Xcode archives and docker volumes. A path whose check cannot finish counts as protected. | `never` |
+| `protected` | Never cleaned and never suggested. It is decided by the same checks a clean pass runs: protected paths (`Downloads`, opencode and your `protected` list), git checkouts, Xcode archives and docker volumes. A path whose check cannot finish counts as protected. `discover` is stricter for unmanaged directories: one that holds a `.git` entry or a `Downloads`, `opencode` or `worktrees` directory anywhere within eight levels is protected too. | `never` |
 
 `--write` merges only what you accept into the config file: the provider gets `enabled: true`, a
 suggested unmanaged directory gets its `dir-pattern` entry, and every other key and comment stays as
-it is. Defaults are never dumped into the file, so a later default change still applies. Without
+it is: unrelated entries keep their comments, blank lines and line endings, and a symlinked config is
+written through. Writes take a lock and replace the file atomically, so parallel runs keep each other's
+providers. Defaults are never dumped into the file, so a later default change still applies. Without
 `--yes` it asks per suggestion and needs a terminal; with `--yes` it takes every regenerable
-suggestion, or exactly the providers you name, and naming a protected one is an error. `--json` with
-`--write` needs `--yes`.
+suggestion, or exactly the providers you name, and naming a protected one is an error. Ctrl-C at a
+prompt exits without writing. `--json` with `--write` needs `--yes`.
 
 `install-agent` and `doctor` mention the number of suggestions (`doctor` as a note that does not
 change its exit code); neither enables anything.
