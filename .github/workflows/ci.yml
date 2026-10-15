@@ -178,15 +178,86 @@ jobs:
           echo "$OUT"
           [ -n "$OUT" ]
 
+  agent-linux:
+    name: Agent (Linux ${{ matrix.backend }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [systemd, cron]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Build binary
+        run: go build -o bilgie ./cmd/bilgie
+
+      - name: Start the systemd user manager
+        if: matrix.backend == 'systemd'
+        run: |
+          uid=$(id -u)
+          sudo loginctl enable-linger "$USER"
+          sudo systemctl start "user@${uid}.service"
+          echo "XDG_RUNTIME_DIR=/run/user/${uid}" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${uid}/bus" >> "$GITHUB_ENV"
+
+      - name: Start cron
+        if: matrix.backend == 'cron'
+        run: |
+          sudo apt-get install -y cron
+          sudo systemctl start cron
+
+      - name: Install, tick and uninstall the agent
+        env:
+          BILGIE_OS_E2E: "1"
+        run: scripts/ci/agent-linux.sh ./bilgie "${{ matrix.backend }}"
+
+  agent-windows:
+    name: Agent (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Build binary
+        shell: bash
+        run: go build -o bilgie.exe ./cmd/bilgie
+
+      - name: Delete through junctions and symlinks
+        shell: bash
+        env:
+          BILGIE_REQUIRE_OS_LINKS: "1"
+        run: go test -count=1 -v -run TestWindowsLinks ./internal/provider
+
+      - name: Register, tick and remove the scheduled task
+        shell: pwsh
+        env:
+          BILGIE_OS_E2E: "1"
+        run: ./scripts/ci/agent-windows.ps1 ./bilgie.exe
+
   test:
     name: Test
     if: always()
-    needs: test-matrix
+    needs: [test-matrix, agent-linux, agent-windows]
     runs-on: ubuntu-latest
     steps:
-      - name: Require all test legs
+      - name: Require all test legs and real-host agent jobs
         run: |
           [ "${{ needs.test-matrix.result }}" = "success" ]
+          [ "${{ needs.agent-linux.result }}" = "success" ]
+          [ "${{ needs.agent-windows.result }}" = "success" ]
 
   build:
     name: Build

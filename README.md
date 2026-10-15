@@ -446,6 +446,12 @@ the command to install into `~/.config`. `StartInterval` is a 32-bit number of s
 files and the first-run marker, and succeeds when nothing is installed; on Linux it clears both
 the systemd units and the crontab line.
 
+CI installs the real agent, waits for the scheduler to run one tick and uninstalls it on Linux
+(systemd user timer and the cron fallback) and on Windows (Task Scheduler). Windows CI also deletes
+through directory junctions and symlinks and checks the target stays intact. Not covered by CI: the
+macOS launchd agent (a hosted runner has no GUI login session to bootstrap into), and a Windows task
+that fires from the schedule rather than `Start-ScheduledTask`. See `scripts/ci`.
+
 Every run appends one JSON line to `~/.local/state/bilgie/runs.jsonl`: time, tier, free space
 before and after, swap in use (`swap_used_mib`, left out when it could not be read), bytes freed per provider,
 and skipped providers with their reasons. The history table shows swap in its SWAP column, so the trend is
