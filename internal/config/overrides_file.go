@@ -1,6 +1,9 @@
 package config
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,9 +22,7 @@ const (
 // returns the file a write must replace so the link itself stays a link.
 func resolveLink(path string) (string, error) {
 	for range maxLinkHops {
-		info, err := os.Lstat(path)
-		isLink := err == nil && info.Mode()&os.ModeSymlink != 0
-		if !isLink {
+		if !isSymlink(path) {
 			return path, nil
 		}
 		dest, err := os.Readlink(path)
@@ -36,16 +37,35 @@ func resolveLink(path string) (string, error) {
 	return "", fmt.Errorf("too many levels of symbolic links: %s", path)
 }
 
-// lockConfig takes an exclusive lock next to the config file, so two writers
-// never interleave their read and write. The lock file stays: removing it
-// while another process waits on it would let two writers hold "the" lock.
+func isSymlink(path string) bool {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeSymlink != 0
+}
+
+// lockConfig takes an exclusive lock for the config file, so two writers never
+// interleave their read and write. The lock lives in the state directory, not
+// next to the file, which may sit in a dotfiles repository. It stays on disk:
+// removing it while another process waits would let two writers both hold the
+// lock. A state directory the user cannot write to leaves the write unlocked,
+// as it was before locking existed.
 func lockConfig(target string) (release func(), err error) {
-	lock := target + ".lock"
+	dir, err := StateDir()
+	if err != nil {
+		return withoutLock(err)
+	}
+	sum := sha256.Sum256([]byte(target))
+	lock := filepath.Join(dir, "config-"+hex.EncodeToString(sum[:8])+".lock")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return unlocked(err)
+	}
 	deadline := time.Now().Add(lockWait)
 	for {
 		release, acquired, err := osshim.TryLock(lock)
 		if err != nil {
-			return nil, fmt.Errorf("lock %s: %w", lock, err)
+			return unlocked(err)
 		}
 		if acquired {
 			return release, nil
@@ -57,15 +77,30 @@ func lockConfig(target string) (release func(), err error) {
 	}
 }
 
+func unlocked(err error) (func(), error) {
+	if errors.Is(err, os.ErrPermission) {
+		return withoutLock(err)
+	}
+	return nil, fmt.Errorf("lock config: %w", err)
+}
+
+func withoutLock(error) (func(), error) {
+	return func() {}, nil
+}
+
 // writeAtomic replaces target with data through a temp file in the same
 // directory, so a reader or a crash never sees half a file. The mode of an
-// existing file is kept.
+// existing file is kept. In a directory the user cannot add files to, the
+// file is rewritten in place instead.
 func writeAtomic(target string, data []byte) (err error) {
 	mode := os.FileMode(0o600)
 	if info, statErr := os.Stat(target); statErr == nil {
 		mode = info.Mode().Perm()
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(target), "."+filepath.Base(target)+".tmp-*")
+	if errors.Is(err, os.ErrPermission) {
+		return os.WriteFile(target, data, mode)
+	}
 	if err != nil {
 		return err
 	}

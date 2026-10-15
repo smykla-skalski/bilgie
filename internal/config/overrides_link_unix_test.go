@@ -31,6 +31,7 @@ func TestWriteOverrides_FollowsASymlinkedConfig(t *testing.T) {
 	link := filepath.Join(dir, "cfg", "config.yaml")
 	require.NoError(t, os.MkdirAll(filepath.Dir(link), 0o750))
 	require.NoError(t, os.Symlink(filepath.Join("..", "dotfiles", "config.yaml"), link))
+	isolateHome(t)
 	loader := NewLoader()
 	loader.SetConfigPath(link)
 
@@ -52,6 +53,7 @@ func TestWriteOverrides_CreatesTheTargetOfADanglingLink(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o750))
 	link := filepath.Join(dir, "config.yaml")
 	require.NoError(t, os.Symlink(target, link))
+	isolateHome(t)
 	loader := NewLoader()
 	loader.SetConfigPath(link)
 
@@ -67,6 +69,7 @@ func TestWriteOverrides_ReportsAWriteFailureOnce(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.Chmod(dir, 0o500))
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	isolateHome(t)
 	loader := NewLoader()
 	loader.SetConfigPath(filepath.Join(dir, "sub", "config.yaml"))
 
@@ -81,10 +84,42 @@ func TestWriteOverrides_RefusesALinkLoop(t *testing.T) {
 	a, b := filepath.Join(dir, "a"), filepath.Join(dir, "b")
 	require.NoError(t, os.Symlink(b, a))
 	require.NoError(t, os.Symlink(a, b))
+	isolateHome(t)
 	loader := NewLoader()
 	loader.SetConfigPath(a)
 
 	_, err := loader.WriteOverrides([]Override{{Name: "npm"}})
 
 	require.ErrorContains(t, err, "symbolic links")
+}
+
+func TestWriteOverrides_WritesAFileInADirectoryItCannotAddTo(t *testing.T) {
+	loader, path := overridesLoader(t, "providers:\n  npm:\n    enabled: false\n")
+	dir := filepath.Dir(path)
+	require.NoError(t, os.Chmod(dir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	if probe, err := os.CreateTemp(dir, "probe"); err == nil {
+		_ = probe.Close()
+		t.Skip("directory permissions are not enforced here")
+	}
+
+	changed, err := loader.WriteOverrides([]Override{{Name: "npm"}})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"npm"}, changed)
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, "providers:\n  npm:\n    enabled: true\n", string(data))
+}
+
+func TestWriteOverrides_KeepsNoLockFileNextToTheConfig(t *testing.T) {
+	loader, path := overridesLoader(t, "providers:\n  npm:\n    enabled: false\n")
+
+	_, err := loader.WriteOverrides([]Override{{Name: "npm"}})
+
+	require.NoError(t, err)
+	entries, err := os.ReadDir(filepath.Dir(path))
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "config.yaml", entries[0].Name())
 }

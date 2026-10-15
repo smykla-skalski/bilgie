@@ -148,12 +148,11 @@ func spliceOverrides(data []byte, entries []Override, changed []string) ([]byte,
 			wanted = append(wanted, e)
 		}
 	}
-	key, value := lookupPair(top, "providers")
 	var ok bool
-	if value == nil {
+	if at := pairIndex(top, "providers"); at < 0 {
 		ok = appendProviders(edits, wanted)
 	} else {
-		ok = editProviders(edits, key, value, wanted)
+		ok = editProviders(edits, top.Content[at], top.Content[at+1], wanted)
 	}
 	if !ok {
 		return nil, false
@@ -161,13 +160,14 @@ func spliceOverrides(data []byte, entries []Override, changed []string) ([]byte,
 	return edits.render(), true
 }
 
-func lookupPair(m *yaml.Node, key string) (k, v *yaml.Node) {
+// pairIndex is the position of key in a mapping's content, or -1.
+func pairIndex(m *yaml.Node, key string) int {
 	for i := 0; i+1 < len(m.Content); i += 2 {
 		if m.Content[i].Value == key {
-			return m.Content[i], m.Content[i+1]
+			return i
 		}
 	}
-	return nil, nil
+	return -1
 }
 
 // newEntryLines renders a provider entry added to providers at indent.
@@ -239,8 +239,8 @@ func editProviders(edits *textEdits, key, providers *yaml.Node, wanted []Overrid
 	edits.step = indentStep(edits, providers, indent)
 	var added []string
 	for _, e := range wanted {
-		k, v := lookupPair(providers, e.Name)
-		if v == nil {
+		at := pairIndex(providers, e.Name)
+		if at < 0 {
 			lines, ok := newEntryLines(e, indent, edits.step)
 			if !ok {
 				return false
@@ -248,7 +248,7 @@ func editProviders(edits *textEdits, key, providers *yaml.Node, wanted []Overrid
 			added = append(added, lines...)
 			continue
 		}
-		if !enableEntry(edits, k, v) {
+		if !enableEntry(edits, providers.Content[at], providers.Content[at+1]) {
 			return false
 		}
 	}
@@ -292,8 +292,8 @@ func enableMapping(edits *textEdits, key, value *yaml.Node) bool {
 	if value.Style&yaml.FlowStyle != 0 || len(value.Content) == 0 || value.Content[0].Line <= key.Line {
 		return false
 	}
-	_, enabled := lookupPair(value, "enabled")
-	if enabled == nil {
+	at := pairIndex(value, "enabled")
+	if at < 0 {
 		indent, ok := blockIndent(edits, value.Content[0], key.Line)
 		if !ok {
 			return false
@@ -301,6 +301,7 @@ func enableMapping(edits *textEdits, key, value *yaml.Node) bool {
 		edits.insertAfter(blockEnd(edits.lines, key.Line-1, indent), indent, "enabled: true")
 		return true
 	}
+	enabled := value.Content[at+1]
 	if enabled.Kind != yaml.ScalarNode || enabled.Style != 0 || enabled.Anchor != "" || !tokenIs(edits, enabled) {
 		return false
 	}
