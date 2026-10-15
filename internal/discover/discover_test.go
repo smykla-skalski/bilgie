@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/smykla-skalski/bilgie/internal/config"
+	"github.com/smykla-skalski/bilgie/internal/provider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -258,7 +259,11 @@ func snapshot(t *testing.T, root string) map[string]string {
 			}
 			sum = fmt.Sprintf("%x", sha256.Sum256(data))
 		}
-		out[path] = info.ModTime().String() + "|" + sum
+		stamp := ""
+		if info.Mode().IsRegular() {
+			stamp = info.ModTime().String()
+		}
+		out[path] = stamp + "|" + sum
 		return nil
 	}))
 	return out
@@ -415,4 +420,16 @@ func TestRun_UnmanagedCandidatesCarryTheirEntry(t *testing.T) {
 	assert.Equal(t, config.TypeDirPattern, got.Entry.Type)
 	assert.Equal(t, got.Define.Paths, got.Entry.Paths)
 	assert.NotEmpty(t, got.Entry.MinIdle)
+}
+
+func TestRun_RecordsAProviderThatCannotBeMeasured(t *testing.T) {
+	s := newSandbox(t)
+	s.fill(s.cacheOf("pip"), 64)
+	opts := s.options()
+	opts.Load = func(string, *config.Config) (provider.Provider, error) { return nil, errNotFound }
+
+	got := find(t, Run(context.Background(), opts), "pip")
+
+	assert.Equal(t, errNotFound.Error(), got.Error)
+	assert.Zero(t, got.Bytes)
 }

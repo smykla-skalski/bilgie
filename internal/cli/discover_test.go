@@ -361,3 +361,45 @@ func TestNoteSuggestions_StaysSilentWithoutSuggestions(t *testing.T) {
 
 	assert.Empty(t, out.String())
 }
+
+func TestRunDiscover_ReadsItsFlagsAndTheRealHome(t *testing.T) {
+	f := newDiscoverFixture(t)
+	f.withSuggestions()
+	require.NoError(t, DiscoverCmd.Flags().Set("json", "true"))
+	require.NoError(t, DiscoverCmd.Flags().Set("unmanaged", "0"))
+	t.Cleanup(func() {
+		require.NoError(t, DiscoverCmd.Flags().Set("json", "false"))
+		require.NoError(t, DiscoverCmd.Flags().Set("unmanaged", "10"))
+	})
+
+	var err error
+	out := captureStdout(t, func() { err = runDiscover(DiscoverCmd, nil) })
+
+	require.NoError(t, err)
+	var got DiscoverOutput
+	require.NoError(t, json.Unmarshal([]byte(out), &got))
+	assert.NotEmpty(t, got.Candidates)
+
+	require.NoError(t, DiscoverCmd.Flags().Set("unmanaged", "-1"))
+	assert.ErrorContains(t, runDiscover(DiscoverCmd, nil), "must not be negative")
+}
+
+func TestPrintPaths_CapsTheList(t *testing.T) {
+	var out bytes.Buffer
+
+	printPaths(&out, []string{"/a", "/b", "/c", "/d", "/e"})
+
+	assert.Contains(t, out.String(), "/c")
+	assert.NotContains(t, out.String(), "/d")
+	assert.Contains(t, out.String(), "and 2 more")
+}
+
+func TestDefaultDiscoverEnv_TargetsTheRunningMachine(t *testing.T) {
+	f := newDiscoverFixture(t)
+
+	env := defaultDiscoverEnv()
+
+	assert.Equal(t, f.home, env.home)
+	assert.NotNil(t, env.lookPath)
+	assert.NotNil(t, env.now)
+}
