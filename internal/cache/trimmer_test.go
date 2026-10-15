@@ -413,3 +413,69 @@ func TestDistinctRoots_FilesystemRootAbsorbsChildren(t *testing.T) {
 	got := distinctRoots([]string{filepath.Join(root, "definitely-missing-x"), root, t.TempDir()})
 	assert.Equal(t, []string{root}, got)
 }
+
+func TestDistinctRoots_RealFileBeatsSymlinkToIt(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "zfile")
+	createTestFile(t, file, 300, time.Hour)
+	link := filepath.Join(root, "alink")
+	if err := os.Symlink(file, link); err != nil {
+		t.Skipf("symlinks unsupported here: %v", err)
+	}
+
+	assert.Equal(t, []string{file}, distinctRoots([]string{link, file}))
+	assert.Equal(t, []string{file}, distinctRoots([]string{file, link}))
+	res, err := CalculateSize([]string{link, file})
+	require.NoError(t, err)
+	assert.Equal(t, int64(300), res.Size)
+	list, err := ListFiles([]string{link, file})
+	require.NoError(t, err)
+	require.Len(t, list.Files, 1)
+	assert.Equal(t, file, list.Files[0].Path)
+}
+
+func TestDistinctRoots_CaseVariantSpellingsOfOneDirectoryCountOnce(t *testing.T) {
+	root := t.TempDir()
+	createTestFile(t, filepath.Join(root, "Cache", "sub", "x.bin"), 100, time.Hour)
+	if _, err := os.Stat(filepath.Join(root, "cache")); err != nil {
+		t.Skip("file system is case-sensitive")
+	}
+
+	got := distinctRoots([]string{filepath.Join(root, "Cache"), filepath.Join(root, "cache")})
+	assert.Len(t, got, 1)
+	got = distinctRoots([]string{filepath.Join(root, "Cache"), filepath.Join(root, "cache", "sub")})
+	assert.Equal(t, []string{filepath.Join(root, "Cache")}, got)
+	res, err := CalculateSize([]string{filepath.Join(root, "Cache"), filepath.Join(root, "cache", "sub")})
+	require.NoError(t, err)
+	assert.Equal(t, int64(100), res.Size)
+}
+
+func TestDistinctRoots_CaseDifferingDirectoriesStayDistinct(t *testing.T) {
+	root := t.TempDir()
+	createTestFile(t, filepath.Join(root, "a", "x.bin"), 100, time.Hour)
+	createTestFile(t, filepath.Join(root, "A", "y.bin"), 200, time.Hour)
+	if entries, err := os.ReadDir(root); err != nil || len(entries) != 2 {
+		t.Skip("file system is case-insensitive")
+	}
+
+	assert.Len(t, distinctRoots([]string{filepath.Join(root, "a"), filepath.Join(root, "A")}), 2)
+	res, err := CalculateSize([]string{filepath.Join(root, "a"), filepath.Join(root, "A")})
+	require.NoError(t, err)
+	assert.Equal(t, int64(300), res.Size)
+}
+
+func TestScan_SymlinkRootIsNotFollowed(t *testing.T) {
+	target := t.TempDir()
+	createTestFile(t, filepath.Join(target, "x.bin"), 100, time.Hour)
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unsupported here: %v", err)
+	}
+
+	res, err := CalculateSize([]string{link})
+	require.NoError(t, err)
+	assert.Zero(t, res.Size)
+	list, err := ListFiles([]string{link})
+	require.NoError(t, err)
+	assert.Empty(t, list.Files)
+}

@@ -8,7 +8,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -189,42 +188,59 @@ func ListFilesContext(ctx context.Context, paths []string) (ListResult, error) {
 	return result, nil
 }
 
-// distinctRoots drops paths that name the same place twice: equal after
-// symlinks are resolved, or inside another directory root of the list. A root
-// that is itself a symlink never absorbs others, because walking it visits
-// nothing. The result is ordered, so scans are deterministic.
+// distinctRoots drops paths that name the same place twice: the same file
+// once symlinks are resolved, or inside another directory root of the list.
+// A root that is itself a symlink never absorbs others, because walking it
+// visits nothing, and where a symlink root and a real one name the same file
+// the real one is kept. Identity comes from the file system, not from the
+// spelling, so case-insensitive and case-sensitive volumes both compare right.
+// The result is ordered, so scans are deterministic.
 func distinctRoots(paths []string) []string {
 	type root struct {
 		path, key string
-		dir       bool
+		info      os.FileInfo
+		dir, link bool
 	}
 	roots := make([]root, 0, len(paths))
 	for _, p := range paths {
-		key := filepath.Clean(p)
+		r := root{path: p, key: filepath.Clean(p)}
 		if resolved, err := filepath.EvalSymlinks(p); err == nil {
-			key = resolved
+			r.key = resolved
 		}
-		isDir := false
 		if info, err := os.Lstat(p); err == nil && info != nil {
-			isDir = info.IsDir()
+			r.dir = info.IsDir()
+			r.link = info.Mode()&fs.ModeSymlink != 0
 		}
-		roots = append(roots, root{path: p, key: foldCase(key), dir: isDir})
+		if info, err := os.Stat(r.key); err == nil {
+			r.info = info
+		}
+		roots = append(roots, r)
 	}
 	slices.SortFunc(roots, func(a, b root) int {
-		return cmp.Or(cmp.Compare(len(a.key), len(b.key)), strings.Compare(a.key, b.key), strings.Compare(a.path, b.path))
+		return cmp.Or(cmp.Compare(len(a.key), len(b.key)), strings.Compare(a.key, b.key), compareBool(a.link, b.link), strings.Compare(a.path, b.path))
 	})
 
 	var kept []root
 	for _, r := range roots {
 		covered := slices.ContainsFunc(kept, func(k root) bool {
-			if r.key == k.key {
+			if r.info != nil && k.info != nil && os.SameFile(r.info, k.info) {
 				return k.dir == r.dir
 			}
 			if !k.dir {
 				return false
 			}
-			rel, err := filepath.Rel(k.key, r.key)
-			return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+			if r.info == nil || k.info == nil {
+				rel, err := filepath.Rel(k.key, r.key)
+				return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+			}
+			for a := filepath.Dir(r.key); ; a = filepath.Dir(a) {
+				if info, err := os.Stat(a); err == nil && os.SameFile(info, k.info) {
+					return true
+				}
+				if filepath.Dir(a) == a {
+					return false
+				}
+			}
 		})
 		if !covered {
 			kept = append(kept, r)
@@ -237,11 +253,14 @@ func distinctRoots(paths []string) []string {
 	return out
 }
 
-// foldCase lowercases paths on the case-insensitive Windows and macOS file
-// systems, so two spellings of one place compare equal.
-func foldCase(p string) string {
-	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
-		return strings.ToLower(p)
+// compareBool orders false before true.
+func compareBool(a, b bool) int {
+	switch {
+	case a == b:
+		return 0
+	case b:
+		return -1
+	default:
+		return 1
 	}
-	return p
 }

@@ -356,7 +356,7 @@ func (p *TreeProvider) markHeld(ctx context.Context, units []treeUnit) {
 			continue
 		}
 		for _, line := range lines {
-			if strings.Contains(foldPath(line), foldPath(u.path)) {
+			if matchesTree(line, u.path) {
 				u.hold = "in use by a running process"
 				break
 			}
@@ -639,18 +639,75 @@ func removeTree(dir string) error {
 // are unified, repeated ones and dot-dot elements resolved, and, on the case-insensitive Windows and macOS file systems,
 // so is the case.
 func foldPath(s string) string {
-	s = strings.ReplaceAll(s, `\`, "/")
+	return foldCaseOS(foldWords(unifySlashes(s)))
+}
+
+// foldPathSpaced is foldPath for a path with a space in a directory name: a
+// dot-dot element resolves against the whole directory name before it, not
+// only the last word. A command line matches when either fold matches, so this
+// can only hold more trees.
+func foldPathSpaced(s string) string {
+	return foldCaseOS(foldWords(resolveDotDot(unifySlashes(s))))
+}
+
+func unifySlashes(s string) string {
+	return strings.ReplaceAll(s, `\`, "/")
+}
+
+func foldWords(s string) string {
 	parts := strings.Split(s, " ")
 	for i, part := range parts {
 		if at := strings.Index(part, "/"); at >= 0 {
 			parts[i] = part[:at] + path.Clean(part[at:])
 		}
 	}
-	s = strings.Join(parts, " ")
+	return strings.Join(parts, " ")
+}
+
+func foldCaseOS(s string) string {
 	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
-		s = strings.ToLower(s)
+		return strings.ToLower(s)
 	}
 	return s
+}
+
+// resolveDotDot removes "<dir>/.." pairs where the directory name may hold
+// spaces. A dot-dot with no directory before it is left for the per-word fold.
+func resolveDotDot(s string) string {
+	s = collapseSlashes(s)
+	for from := 0; from < len(s); {
+		i := strings.Index(s[from:], "/..")
+		if i < 0 {
+			break
+		}
+		i += from
+		end := i + len("/..")
+		if end < len(s) && s[end] != '/' && s[end] != ' ' {
+			from = end
+			continue
+		}
+		j := strings.LastIndex(s[:i], "/")
+		if j < 0 || s[j+1:i] == ".." || s[j+1:i] == "." || j+1 == i {
+			from = end
+			continue
+		}
+		s = s[:j] + s[end:]
+		from = 0
+	}
+	return s
+}
+
+func collapseSlashes(s string) string {
+	for strings.Contains(s, "//") {
+		s = strings.ReplaceAll(s, "//", "/")
+	}
+	return s
+}
+
+// matchesTree reports whether a process command line names the tree dir.
+func matchesTree(line, dir string) bool {
+	want := foldPath(dir)
+	return strings.Contains(foldPath(line), want) || strings.Contains(foldPathSpaced(line), want)
 }
 
 func firstMatch(lines, wanted []string) string {
