@@ -931,7 +931,6 @@ func TestFoldPathSpaced_KeepsWhatItCannotResolve(t *testing.T) {
 	assert.Equal(t, foldPath("/../a"), foldPathSpaced("/../a"))
 	assert.Equal(t, foldPath("/a/../.."), foldPathSpaced("/a/../.."))
 	assert.Equal(t, foldPath("x/..y"), foldPathSpaced("x/..y"))
-	assert.Equal(t, foldPath("/a/./../b"), foldPathSpaced("/a/./../b"))
 }
 
 func TestFoldPathSpaced_ResolvesDotDotBeforeASpace(t *testing.T) {
@@ -943,4 +942,9 @@ func TestFoldPathSpaced_StaysLinearOnLongLines(t *testing.T) {
 	start := time.Now()
 	foldPathSpaced(line)
 	assert.Less(t, time.Since(start), 2*time.Second)
+}
+
+func TestFoldPathSpaced_ResolvesDotDotAfterADotElement(t *testing.T) {
+	assert.Contains(t, foldPathSpaced("cmd /Users/me/My Dir/./../proj"), foldPath("/Users/me/proj"))
+	assert.Contains(t, foldPathSpaced("cmd /a/./b"), foldPath("/a/b"))
 }

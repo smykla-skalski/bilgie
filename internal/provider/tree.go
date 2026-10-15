@@ -685,9 +685,12 @@ func resolveDotDot(s string) string {
 	parts := strings.Split(collapseSlashes(s), "/")
 	out := parts[:1]
 	for _, part := range parts[1:] {
+		if part == "." {
+			continue
+		}
 		tail, isDotDot := strings.CutPrefix(part, "..")
 		if isDotDot && (tail == "" || tail[0] == ' ') && len(out) > 1 {
-			if top := out[len(out)-1]; top != "" && top != ".." && top != "." {
+			if top := out[len(out)-1]; top != "" && top != ".." {
 				out = out[:len(out)-1]
 				out[len(out)-1] += tail
 				continue

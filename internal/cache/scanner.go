@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"github.com/smykla-skalski/bilgie/internal/osshim"
 )
@@ -265,7 +266,29 @@ func sameRoot(a, b string, ai, bi os.FileInfo) bool {
 	if !os.SameFile(ai, bi) {
 		return false
 	}
-	return ai.IsDir() || strings.EqualFold(a, b)
+	return ai.IsDir() || a == b || (strings.EqualFold(a, b) && caseInsensitive(a))
+}
+
+// caseInsensitive reports whether the volume holding path ignores case, by
+// asking whether its parent directory is found under a case-swapped name.
+func caseInsensitive(path string) bool {
+	dir := filepath.Dir(path)
+	base := filepath.Base(dir)
+	swapped := strings.Map(func(r rune) rune {
+		if unicode.IsUpper(r) {
+			return unicode.ToLower(r)
+		}
+		return unicode.ToUpper(r)
+	}, base)
+	if swapped == base {
+		return false
+	}
+	orig, err := os.Stat(dir)
+	if err != nil {
+		return false
+	}
+	other, err := os.Stat(filepath.Join(filepath.Dir(dir), swapped))
+	return err == nil && os.SameFile(orig, other)
 }
 
 // compareBool orders false before true.

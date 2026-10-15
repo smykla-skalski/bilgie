@@ -506,3 +506,29 @@ func TestDistinctRoots_RepeatedMissingRootCountsOnce(t *testing.T) {
 	}
 	assert.Equal(t, []string{dangling}, distinctRoots([]string{dangling, dangling}))
 }
+
+func TestDistinctRoots_CaseOnlyHardLinksStayDistinctOnCaseSensitiveVolumes(t *testing.T) {
+	root := t.TempDir()
+	upper := filepath.Join(root, "File")
+	createTestFile(t, upper, 100, time.Hour)
+	lower := filepath.Join(root, "file")
+	if err := os.Link(upper, lower); err != nil {
+		t.Skipf("hard links unsupported here: %v", err)
+	}
+	if entries, err := os.ReadDir(root); err != nil || len(entries) != 2 {
+		t.Skip("file system is case-insensitive")
+	}
+
+	assert.Len(t, distinctRoots([]string{upper, lower}), 2)
+	assert.False(t, caseInsensitive(upper))
+}
+
+func TestCaseInsensitive_AgreesWithTheVolume(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "Probe")
+	require.NoError(t, os.Mkdir(dir, 0o750))
+	_, err := os.Stat(filepath.Join(root, "probe"))
+
+	assert.Equal(t, err == nil, caseInsensitive(filepath.Join(dir, "f")))
+	assert.False(t, caseInsensitive(string(filepath.Separator)+"x"))
+}
