@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -597,4 +598,91 @@ func TestUVProvider_SweepSkipsWhenUVStartedBeforeTheFirstSnapshot(t *testing.T) 
 	require.NoError(t, err)
 	assert.Contains(t, res.SkipReason, "uv started (pid 900) while checking")
 	f.requireIntact(t, envA, envB)
+}
+
+func skipIfPermissionsAreNotEnforced(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("file modes are not enforced here")
+	}
+}
+
+func TestUVProvider_SweepRestoresWhenTheRecheckFails(t *testing.T) {
+	f := newSweepFixture(t)
+	f.setProcs(f.aged, f.serverFor(envA))
+	calls := 0
+	f.p.processEnvs = func(context.Context) ([]osshim.ProcessEnv, error) {
+		calls++
+		if calls > 1 {
+			return nil, errors.New("boom")
+		}
+		return nil, nil
+	}
+
+	res, err := f.p.Clean(context.Background(), CleanOptions{Mode: CleanModeSmart})
+	require.NoError(t, err)
+	assert.Contains(t, res.SkipReason, "cannot recheck the cached environments")
+	assert.Empty(t, res.Warnings)
+	f.requireIntact(t, envA, envB)
+}
+
+func TestUVProvider_SweepKeepsEverythingWhenALinkCannotBeUnpublished(t *testing.T) {
+	skipIfPermissionsAreNotEnforced(t)
+	f := newSweepFixture(t)
+	f.setProcs(f.aged, f.serverFor(envA))
+	bucket := filepath.Join(f.dir, "environments-v2", "bucket1")
+	require.NoError(t, os.Chmod(bucket, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(bucket, 0o700) })
+
+	res, err := f.p.Clean(context.Background(), CleanOptions{Mode: CleanModeSmart})
+	require.NoError(t, err)
+	assert.Contains(t, res.SkipReason, "cannot unpublish")
+	require.NoError(t, os.Chmod(bucket, 0o700))
+	f.requireIntact(t, envA, envB)
+}
+
+func TestUVProvider_SweepSkipsWhenTheEnvironmentsCannotBeListed(t *testing.T) {
+	skipIfPermissionsAreNotEnforced(t)
+	f := newSweepFixture(t)
+	f.setProcs(f.aged, f.serverFor(envA))
+	envDir := filepath.Join(f.dir, "environments-v2")
+	require.NoError(t, os.Chmod(envDir, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(envDir, 0o700) })
+
+	res, err := f.p.Clean(context.Background(), CleanOptions{Mode: CleanModeSmart})
+	require.NoError(t, err)
+	assert.Contains(t, res.SkipReason, "cannot list cached environments")
+	require.NoError(t, os.Chmod(envDir, 0o700))
+	f.requireIntact(t, envA, envB)
+}
+
+func TestUVProvider_SweepReportsADirectoryItCannotRemove(t *testing.T) {
+	skipIfPermissionsAreNotEnforced(t)
+	f := newSweepFixture(t)
+	f.setProcs(f.aged, f.serverFor(envA))
+	archive := filepath.Join(f.dir, "archive-v0")
+	require.NoError(t, os.Chmod(archive, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(archive, 0o700) })
+
+	res, err := f.p.Clean(context.Background(), CleanOptions{Mode: CleanModeSmart})
+	require.NoError(t, err)
+	require.NoError(t, os.Chmod(archive, 0o700))
+	require.Len(t, res.Warnings, 1)
+	assert.Contains(t, res.Warnings[0], "could not remove")
+	assert.Empty(t, res.Entries)
+	f.requireIntact(t, envA)
+}
+
+func TestUVProvider_SweepWithoutACacheDirectorySkips(t *testing.T) {
+	f := newSweepFixture(t)
+	f.setProcs(f.aged, f.serverFor(envA))
+	require.NoError(t, os.RemoveAll(filepath.Join(f.dir, "environments-v2")))
+
+	res, err := f.p.Clean(context.Background(), CleanOptions{Mode: CleanModeSmart})
+	require.NoError(t, err)
+	assert.Contains(t, res.SkipReason, "no cached environment to remove")
+}
+
+func TestUVProvider_SweepDescribesAnUnknownStartTime(t *testing.T) {
+	assert.Equal(t, "uvx is running (pid 7)", describeAged([]osshim.Process{{PID: 7}}, time.Now()))
 }
