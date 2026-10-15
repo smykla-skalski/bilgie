@@ -140,3 +140,41 @@ func TestWriteOverrides_RefusesAReadOnlyConfig(t *testing.T) {
 	require.NoError(t, readErr)
 	assert.Equal(t, content, string(data))
 }
+
+func TestWriteOverrides_WritesWhenTheStateDirectoryIsNotWritable(t *testing.T) {
+	loader, path := overridesLoader(t, "providers:\n  npm:\n    enabled: false\n")
+	home := t.TempDir()
+	require.NoError(t, os.Chmod(home, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(home, 0o700) })
+	t.Setenv("HOME", home)
+	if err := os.Mkdir(filepath.Join(home, "probe"), 0o700); err == nil {
+		t.Skip("directory permissions are not enforced here")
+	}
+
+	changed, err := loader.WriteOverrides([]Override{{Name: "npm"}})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"npm"}, changed)
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "enabled: true")
+}
+
+func TestWriteOverrides_FollowsARelativeLinkChain(t *testing.T) {
+	isolateHome(t)
+	dir := t.TempDir()
+	target := filepath.Join(dir, "real", "config.yaml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o750))
+	require.NoError(t, os.WriteFile(target, []byte("providers:\n  npm:\n    enabled: false\n"), 0o600))
+	require.NoError(t, os.Symlink(filepath.Join("real", "config.yaml"), filepath.Join(dir, "mid")))
+	require.NoError(t, os.Symlink("mid", filepath.Join(dir, "top")))
+	loader := NewLoader()
+	loader.SetConfigPath(filepath.Join(dir, "top"))
+
+	_, err := loader.WriteOverrides([]Override{{Name: "npm"}})
+
+	require.NoError(t, err)
+	data, err := os.ReadFile(target)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "enabled: true")
+}

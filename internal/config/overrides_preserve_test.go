@@ -145,3 +145,76 @@ func TestUnlocked_OnlyAPermissionErrorLeavesTheWriteUnlocked(t *testing.T) {
 	_, err = unlocked(os.ErrInvalid)
 	require.ErrorIs(t, err, os.ErrInvalid)
 }
+
+func TestSpliceOverrides_DeclinesLayoutsItCannotEditInPlace(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+	}{
+		{name: "flow top level", data: "{providers: {npm: {}}}\n"},
+		{name: "top level list", data: "- a\n"},
+		{name: "flow providers", data: "providers: {npm: {max_size: 1G}}\n"},
+		{name: "empty providers", data: "providers:\n"},
+		{name: "null entry", data: "providers:\n  npm:\n  pip:\n    enabled: true\n"},
+		{name: "flow entry", data: "providers:\n  npm: {max_size: 1G}\n"},
+		{name: "alias on the next line", data: "base: &b\n  max_size: 1G\nproviders:\n  other:\n    enabled: true\n  npm:\n    *b\n"},
+		{name: "alias to a scalar", data: "base: &b 5\nproviders:\n  other:\n    enabled: true\n  npm: *b\n"},
+		{name: "quoted enabled", data: "providers:\n  npm:\n    enabled: \"false\"\n"},
+		{name: "anchored enabled", data: "providers:\n  npm:\n    enabled: &f false\n"},
+		{name: "enabled not a scalar", data: "providers:\n  npm:\n    enabled: [a]\n"},
+		{name: "first key on the key line", data: "providers: {}\n"},
+		{name: "scalar entry", data: "providers:\n  npm: yes\n"},
+		{name: "empty file", data: ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, ok := spliceOverrides([]byte(tc.data), []Override{{Name: "npm"}}, []string{"npm"})
+			assert.False(t, ok)
+		})
+	}
+}
+
+func TestSpliceOverrides_DeclinesADefinitionItCannotRender(t *testing.T) {
+	_, ok := spliceOverrides([]byte("version: \"1\"\n"), []Override{{Name: "x\ny"}}, []string{"x\ny"})
+	assert.False(t, ok)
+}
+
+func TestWriteOverrides_FallsBackAndStillMeansTheSame(t *testing.T) {
+	tests := []struct {
+		name   string
+		before string
+	}{
+		{name: "alias on the next line", before: "base: &b\n  max_size: 1G\nproviders:\n  npm:\n    *b\n"},
+		{name: "quoted enabled", before: "providers:\n  npm:\n    enabled: \"false\"\n"},
+		{name: "flow entry", before: "providers:\n  npm: {max_size: 1G}\n"},
+		{name: "null entry", before: "providers:\n  npm:\n"},
+		{name: "null providers", before: "providers:\n"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			loader, _ := overridesLoader(t, tc.before)
+
+			changed, err := loader.WriteOverrides([]Override{{Name: "npm"}})
+
+			require.NoError(t, err)
+			assert.Equal(t, []string{"npm"}, changed)
+			cfg, err := loader.Load()
+			require.NoError(t, err)
+			assert.True(t, cfg.Providers["npm"].Enabled)
+		})
+	}
+}
+
+func TestByteOffset_CountsCharactersNotBytes(t *testing.T) {
+	assert.Equal(t, 0, byteOffset("héllo", 1))
+	assert.Equal(t, 3, byteOffset("héllo", 3))
+	assert.Equal(t, -1, byteOffset("ab", 9))
+}
+
+func TestTextEdits_RefusesAPositionOutsideTheFile(t *testing.T) {
+	edits := &textEdits{lines: []string{"a: 1\n"}, replaced: map[int]string{}, after: map[int][]string{}}
+
+	assert.False(t, edits.replaceToken(3, 1, 1, "x"))
+	assert.False(t, edits.replaceToken(1, 40, 1, "x"))
+	assert.False(t, edits.replaceToken(1, 1, 40, "x"))
+}
