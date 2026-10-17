@@ -1,55 +1,67 @@
 {
-  "automerge": true,
-  "automergeStrategy": "squash",
-  "platformAutomerge": true,
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "config:recommended"
+    "config:best-practices",
+    ":semanticCommits",
+    ":gitSignOff",
+    ":dependencyDashboard",
+    ":label(dependencies)",
+    ":rebaseStalePrs",
+    ":enableVulnerabilityAlertsWithAdditionalLabel(kind/security)",
+    ":prConcurrentLimit20",
+    "helpers:pinGitHubActionDigests",
+    "security:openssf-scorecard",
+    "group:linters"
   ],
-  "customManagers": [
-    {
-      "customType": "regex",
-      "description": "Go tools pinned inline in CI workflows and mise tasks",
-      "managerFilePatterns": [
-        "/^\\.github/workflows/.+\\.ya?ml$/",
-        "/^\\.mise\\.toml$/"
-      ],
-      "matchStrings": [
-        "(?<depName>[a-z0-9.\\-/]+?)/cmd/[a-z0-9-]+@(?<currentValue>v[0-9][^\\s\"']*)"
-      ],
-      "datasourceTemplate": "go"
-    },
-    {
-      "customType": "regex",
-      "description": "golangci-lint version used by golangci-lint-action",
-      "managerFilePatterns": [
-        "/^\\.github/workflows/ci\\.ya?ml$/"
-      ],
-      "matchStrings": [
-        "version: (?<currentValue>v2[0-9.]+)\\s"
-      ],
-      "depNameTemplate": "golangci/golangci-lint",
-      "datasourceTemplate": "github-releases"
-    },
-    {
-      "customType": "regex",
-      "description": "GoReleaser version used by goreleaser-action",
-      "managerFilePatterns": [
-        "/^\\.github/workflows/(release|goreleaser)\\.ya?ml$/"
-      ],
-      "matchStrings": [
-        "version: (?<currentValue>v[0-9][^\\s]*)"
-      ],
-      "depNameTemplate": "goreleaser/goreleaser",
-      "datasourceTemplate": "github-releases"
-    }
-  ],
+  "ignorePaths": ["**/tmp/**", ".github/workflows/smyklot-pr-commands.yml", ".github/workflows/smyklot-poll.yml"],
+  "osvVulnerabilityAlerts": true,
+  "gitIgnoredAuthors": ["205507218+smyklot[bot]@users.noreply.github.com"],
+  "internalChecksFilter": "strict",
+  "automergeStrategy": "squash",
+  "platformAutomerge": false,
+  "minimumReleaseAgeBehaviour": "timestamp-required",
   "packageRules": [
     {
-      "description": "Bump the go.mod toolchain and the mise go pin together",
+      "description": "Automerge updates with a verified release age of at least seven days",
+      "matchUpdateTypes": ["major", "minor", "patch", "digest"],
+      "minimumReleaseAge": "7 days",
+      "automerge": true
+    },
+    {
+      "addLabels": ["area/ci"],
+      "commitMessageTopic": "{{depName}} action",
+      "description": "GitHub Actions dependencies",
+      "matchManagers": ["github-actions"],
+      "semanticCommitType": "ci"
+    },
+    {
+      "description": "Group Go tool dependencies",
+      "groupName": "Go tooling",
+      "matchDepTypes": ["require"],
+      "matchManagers": ["gomod"],
+      "matchPackageNames": ["/^golang.org/x/tools/"]
+    },
+    {
+      "description": [
+        " Group dependency bumps from selected GitHub sources into a single PR across managers",
+        " (e.g., mise and gomod) to avoid separate PRs per manager"
+      ],
+      "matchSourceUrls": ["https://github.com/{onsi/ginkgo,golangci/golangci-lint}"],
+      "groupName": "{{{replace 'https://github\\.com/[a-z-]+/' '' sourceUrl}}}"
+    },
+    {
+      "description": "Group Go version updates from gomod and mise into a single PR",
+      "groupName": "go version",
+      "matchDepNames": ["go"],
       "matchManagers": ["gomod", "mise"],
-      "matchDepNames": ["go", "golang"],
-      "groupName": "go toolchain"
+      "rangeStrategy": "bump"
+    },
+    {
+      "description": "Smyklot action managed by sync-smyklot workflow",
+      "enabled": false,
+      "matchManagers": ["github-actions"],
+      "matchPackageNames": ["smykla-skalski/smyklot"]
     }
-  ]
+  ],
+  "vulnerabilityAlerts": {"automerge": false}
 }
