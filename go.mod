@@ -1,13 +1,13 @@
 module github.com/smykla-skalski/bilgie
 
-go 1.26.0
+go 1.26.7
 
 toolchain go1.27.3
 
 require (
 	charm.land/bubbles/v2 v2.2.1
 	charm.land/bubbletea/v2 v2.1.1
-	charm.land/lipgloss/v2 v2.0.6
+	charm.land/lipgloss/v2 v2.1.0
 	github.com/charmbracelet/x/term v0.2.2
 	github.com/dustin/go-humanize v1.1.0
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
