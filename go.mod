@@ -6,7 +6,7 @@ toolchain go1.27.4
 
 require (
 	charm.land/bubbles/v2 v2.2.2
-	charm.land/bubbletea/v2 v2.1.2
+	charm.land/bubbletea/v2 v2.1.3
 	charm.land/lipgloss/v2 v2.1.1
 	github.com/charmbracelet/x/term v0.2.2
 	github.com/dustin/go-humanize v1.1.0
@@ -23,7 +23,7 @@ require (
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
 	github.com/charmbracelet/harmonica v0.2.0 // indirect
 	github.com/charmbracelet/ultraviolet v0.0.0-20261008173134-6b8d4baf91b4 // indirect
-	github.com/charmbracelet/x/ansi v0.11.9 // indirect
+	github.com/charmbracelet/x/ansi v0.11.10 // indirect
 	github.com/charmbracelet/x/termios v0.1.1 // indirect
 	github.com/charmbracelet/x/windows v0.2.2 // indirect
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
