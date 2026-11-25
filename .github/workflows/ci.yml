@@ -40,7 +40,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Install nilaway
-        run: go install go.uber.org/nilaway/cmd/nilaway@v0.0.0-20261123170355-271eb36a4349
+        run: go install go.uber.org/nilaway/cmd/nilaway@v0.0.0-20261124161746-91ad9bf5d8e6
 
       - name: Run nilaway
         run: |
